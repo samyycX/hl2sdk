@@ -19,6 +19,7 @@
 
 #include <Color.h>
 #include <stdlib.h>
+#include "tier1/convar.h"
 #include "tier0/dbg.h"
 #include "tier0/mem.h"
 #include "utlvector.h"
@@ -2570,5 +2571,191 @@ bool KeyValues::ProcessResolutionKeys( const char *pResString )
 		}
 	}
 
+	return true;
+}
+
+
+//
+// KeyValues dumping implementation
+//
+bool KeyValues::Dump( IKeyValuesDumpContext *pDump, int nIndentLevel /* = 0 */ )
+{
+	if ( !pDump->KvBeginKey( this, nIndentLevel ) )
+		return false;
+
+	// Dump values
+	for ( KeyValues *val = this ? GetFirstValue() : NULL; val; val = val->GetNextValue() )
+	{
+		if ( !pDump->KvWriteValue( val, nIndentLevel + 1 ) )
+			return false;
+	}
+
+	// Dump subkeys
+	for ( KeyValues *sub = this ? GetFirstTrueSubKey() : NULL; sub; sub = sub->GetNextTrueSubKey() )
+	{
+		if ( !sub->Dump( pDump, nIndentLevel + 1 ) )
+			return false;
+	}
+
+	return pDump->KvEndKey( this, nIndentLevel );
+}
+
+bool IKeyValuesDumpContextAsText::KvBeginKey( KeyValues *pKey, int nIndentLevel )
+{
+	if ( pKey )
+	{
+		return
+			KvWriteIndent( nIndentLevel ) &&
+			KvWriteText( pKey->GetName() ) &&
+			KvWriteText( " {\n" );
+	}
+	else
+	{
+		return
+			KvWriteIndent( nIndentLevel ) &&
+			KvWriteText( "<< NULL >>\n" );
+	}
+}
+
+bool IKeyValuesDumpContextAsText::KvWriteValue( KeyValues *val, int nIndentLevel )
+{
+	if ( !val )
+	{
+		return
+			KvWriteIndent( nIndentLevel ) &&
+			KvWriteText( "<< NULL >>\n" );
+	}
+
+	if ( !KvWriteIndent( nIndentLevel ) )
+		return false;
+
+	if ( !KvWriteText( val->GetName() ) )
+		return false;
+
+	if ( !KvWriteText( " " ) )
+		return false;
+
+	switch ( val->GetDataType() )
+	{
+	case KeyValues::TYPE_STRING:
+		{
+			if ( !KvWriteText( val->GetString() ) )
+				return false;
+		}
+		break;
+
+	case KeyValues::TYPE_INT:
+		{
+			int n = val->GetInt();
+			char *chBuffer = ( char * ) stackalloc( 128 );
+			V_snprintf( chBuffer, 128, "int( %d = 0x%X )", n, n );
+			if ( !KvWriteText( chBuffer ) )
+				return false;
+		}
+		break;
+
+	case KeyValues::TYPE_FLOAT:
+		{
+			float fl = val->GetFloat();
+			char *chBuffer = ( char * ) stackalloc( 128 );
+			V_snprintf( chBuffer, 128, "float( %f )", fl );
+			if ( !KvWriteText( chBuffer ) )
+				return false;
+		}
+		break;
+
+	case KeyValues::TYPE_PTR:
+		{
+			void *ptr = val->GetPtr();
+			char *chBuffer = ( char * ) stackalloc( 128 );
+			V_snprintf( chBuffer, 128, "ptr( 0x%p )", ptr );
+			if ( !KvWriteText( chBuffer ) )
+				return false;
+		}
+		break;
+
+	case KeyValues::TYPE_WSTRING:
+		{
+			wchar_t const *wsz = val->GetWString();
+			int nLen = V_wcslen( wsz );
+			int numBytes = nLen*2 + 64;
+			char *chBuffer = ( char * ) stackalloc( numBytes );
+			V_snprintf( chBuffer, numBytes, "%ls [wstring, len = %d]", wsz, nLen );
+			if ( !KvWriteText( chBuffer ) )
+				return false;
+		}
+		break;
+
+	case KeyValues::TYPE_UINT64:
+		{
+			uint64 n = val->GetUint64();
+			char *chBuffer = ( char * ) stackalloc( 128 );
+			V_snprintf( chBuffer, 128, "u64( %lld = 0x%llX )", n, n );
+			if ( !KvWriteText( chBuffer ) )
+				return false;
+		}
+		break;
+
+	default:
+		break;
+#if 0	// this code was accidentally stubbed out by a mis-integration in CL722860; it hasn't been tested
+		{
+			int n = val->GetDataType();
+			char *chBuffer = ( char * ) stackalloc( 128 );
+			V_snprintf( chBuffer, 128, "??kvtype[%d]", n );
+			if ( !KvWriteText( chBuffer ) )
+				return false;
+		}
+		break;
+#endif
+	}
+
+	return KvWriteText( "\n" );
+}
+
+bool IKeyValuesDumpContextAsText::KvEndKey( KeyValues *pKey, int nIndentLevel )
+{
+	if ( pKey )
+	{
+		return
+			KvWriteIndent( nIndentLevel ) &&
+			KvWriteText( "}\n" );
+	}
+	else
+	{
+		return true;
+	}
+}
+
+bool IKeyValuesDumpContextAsText::KvWriteIndent( int nIndentLevel )
+{
+	int numIndentBytes = ( nIndentLevel * 2 + 1 );
+	char *pchIndent = ( char * ) stackalloc( numIndentBytes );
+	memset( pchIndent, ' ', numIndentBytes - 1 );
+	pchIndent[ numIndentBytes - 1 ] = 0;
+	return KvWriteText( pchIndent );
+}
+
+
+bool CKeyValuesDumpContextAsDevMsg::KvBeginKey( KeyValues *pKey, int nIndentLevel )
+{
+	static ConVarRef r_developer( "developer" );
+	if ( r_developer.IsValid() && r_developer.GetInt() < m_nDeveloperLevel )
+		// If "developer" is not the correct level, then avoid evaluating KeyValues tree early
+		return false;
+	else
+		return IKeyValuesDumpContextAsText::KvBeginKey( pKey, nIndentLevel );
+}
+
+bool CKeyValuesDumpContextAsDevMsg::KvWriteText( char const *szText )
+{
+	if ( m_nDeveloperLevel > 0 )
+	{
+		DevMsg( "%s", szText );
+	}
+	else
+	{
+		Msg( "%s", szText );
+	}
 	return true;
 }
