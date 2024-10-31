@@ -449,45 +449,44 @@ inline void KeyValues::SetExpressionHandler( GetSymbolProc_t pExpSymbolProc )
 // KeyValuesDumpContext and generic implementations
 //
 
-// class IKeyValuesDumpContext
-// {
-// public:
-// 	virtual bool KvBeginKey( KeyValues *pKey, int nIndentLevel ) = 0;
-// 	virtual bool KvWriteValue( KeyValues *pValue, int nIndentLevel ) = 0;
-// 	virtual bool KvEndKey( KeyValues *pKey, int nIndentLevel ) = 0;
-// };
+class IKeyValuesDumpContext
+{
+public:
+	virtual bool KvBeginKey( KeyValues *pKey, int nIndentLevel ) = 0;
+	virtual bool KvWriteValue( KeyValues *pValue, int nIndentLevel ) = 0;
+	virtual bool KvEndKey( KeyValues *pKey, int nIndentLevel ) = 0;
+};
 
-// class IKeyValuesDumpContextAsText : public IKeyValuesDumpContext
-// {
-// public:
-// 	virtual bool KvBeginKey( KeyValues *pKey, int nIndentLevel );
-// 	virtual bool KvWriteValue( KeyValues *pValue, int nIndentLevel );
-// 	virtual bool KvEndKey( KeyValues *pKey, int nIndentLevel );
+class IKeyValuesDumpContextAsText : public IKeyValuesDumpContext
+{
+public:
+	virtual bool KvBeginKey( KeyValues *pKey, int nIndentLevel );
+	virtual bool KvWriteValue( KeyValues *pValue, int nIndentLevel );
+	virtual bool KvEndKey( KeyValues *pKey, int nIndentLevel );
 
-// public:
-// 	virtual bool KvWriteIndent( int nIndentLevel );
-// 	virtual bool KvWriteText( char const *szText ) = 0;
-// };
+public:
+	virtual bool KvWriteIndent( int nIndentLevel );
+	virtual bool KvWriteText( char const *szText ) = 0;
+};
 
-// class CKeyValuesDumpContextAsDevMsg : public IKeyValuesDumpContextAsText
-// {
-// public:
-// 	// Overrides developer level to dump in DevMsg, zero to dump as Msg
-// 	CKeyValuesDumpContextAsDevMsg( int nDeveloperLevel = 1 ) : m_nDeveloperLevel( nDeveloperLevel ) {}
+class CKeyValuesDumpContextAsDevMsg : public IKeyValuesDumpContextAsText
+{
+public:
+	// Overrides developer level to dump in DevMsg, zero to dump as Msg
+	CKeyValuesDumpContextAsDevMsg( int nDeveloperLevel = 1 ) : m_nDeveloperLevel( nDeveloperLevel ) {}
 
-// public:
-// 	virtual bool KvBeginKey( KeyValues *pKey, int nIndentLevel );
-// 	virtual bool KvWriteText( char const *szText );
+public:
+	virtual bool KvBeginKey( KeyValues *pKey, int nIndentLevel );
+	virtual bool KvWriteText( char const *szText );
 
-// protected:
-// 	int m_nDeveloperLevel;
-// };
+protected:
+	int m_nDeveloperLevel;
+};
 
-// inline bool KeyValuesDumpAsDevMsg( KeyValues *pKeyValues, int nIndentLevel = 0, int nDeveloperLevel = 1 )
-// {
-// 	CKeyValuesDumpContextAsDevMsg ctx( nDeveloperLevel );
-// 	return pKeyValues->Dump( &ctx, nIndentLevel );
-// }
-
+inline bool KeyValuesDumpAsDevMsg( KeyValues *pKeyValues, int nIndentLevel = 0, int nDeveloperLevel = 1 )
+{
+	CKeyValuesDumpContextAsDevMsg ctx( nDeveloperLevel );
+	return pKeyValues->Dump( &ctx, nIndentLevel );
+}
 
 #endif // KEYVALUES_H
