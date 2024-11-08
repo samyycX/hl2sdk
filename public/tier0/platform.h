@@ -766,8 +766,10 @@ inline T DWordSwapAsm( T dw )
 // The typically used methods.
 //-------------------------------------
 
-#if defined(__i386__) && !defined LITTLE_ENDIAN
+#if !defined LITTLE_ENDIAN
+#if defined(__i386__) || defined(_M_IX86) || defined(_M_X64)
 #define LITTLE_ENDIAN 1
+#endif
 #endif
 
 #if (defined( _SGI_SOURCE ) || defined( _X360 )) && !defined BIG_ENDIAN
