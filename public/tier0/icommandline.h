@@ -1,4 +1,4 @@
-//===== Copyright © 1996-2005, Valve Corporation, All rights reserved. ======//
+//===== Copyright Â© 1996-2005, Valve Corporation, All rights reserved. ======//
 //
 // Purpose: 
 //
@@ -37,6 +37,12 @@ public:
 	virtual int			ParmCount() const = 0;
 	virtual int			FindParm( const char *psz ) const = 0;	// Returns 0 if not found.
 	virtual const char* GetParm( int nIndex ) const = 0;
+	
+	virtual bool		HasParm( const char *parm ) = 0;
+	
+	// Additions in 9247927 (2024-10-11)
+	virtual void		CreateCmdLine1( const char *commandline, bool unknown ) = 0;
+	virtual void		CreateCmdLine1( int argc, char **argv, bool unknown ) = 0;
 };
 
 //-----------------------------------------------------------------------------

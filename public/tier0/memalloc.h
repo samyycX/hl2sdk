@@ -73,7 +73,7 @@ public:
 
 	// FIXME: Remove when we have our own allocator
 	// these methods of the Crt debug code is used in our codebase currently
-	virtual long CrtSetBreakAlloc( long lNewBreakAlloc ) = 0;
+	virtual int32_t CrtSetBreakAlloc( int32_t lNewBreakAlloc ) = 0;
 	virtual	int CrtSetReportMode( int nReportType, int nReportMode ) = 0;
 	virtual int CrtIsValidHeapPointer( const void *pMem ) = 0;
 	virtual int CrtIsValidPointer( const void *pMem, unsigned int size, int access ) = 0;
@@ -178,7 +178,7 @@ inline void *MemAlloc_AllocAligned( size_t size, size_t align )
 {
 	unsigned char *pAlloc, *pResult;
 
-	if (!IsPowerOfTwo(align))
+	if (!ValueIsPowerOfTwo(align))
 		return NULL;
 
 	align = (align > sizeof(void *) ? align : sizeof(void *)) - 1;
@@ -196,7 +196,7 @@ inline void *MemAlloc_AllocAligned( size_t size, size_t align, const char *pszFi
 {
 	unsigned char *pAlloc, *pResult;
 
-	if (!IsPowerOfTwo(align))
+	if (!ValueIsPowerOfTwo(align))
 		return NULL;
 
 	align = (align > sizeof(void *) ? align : sizeof(void *)) - 1;
@@ -248,7 +248,7 @@ inline void *MemAlloc_AllocAlignedFileLine( size_t size, size_t align, const cha
 
 inline void *MemAlloc_ReallocAligned( void *ptr, size_t size, size_t align )
 {
-	if ( !IsPowerOfTwo( align ) )
+	if ( !ValueIsPowerOfTwo( align ) )
 		return NULL;
 
 	// Don't change alignment between allocation + reallocation.
@@ -382,7 +382,7 @@ public:
 
 	#pragma warning(disable:4290)
 	#pragma warning(push)
-	#include <typeinfo.h>
+	#include <typeinfo>
 
 	// MEM_DEBUG_CLASSNAME is opt-in.
 	// Note: typeid().name() is not threadsafe, so if the project needs to access it in multiple threads

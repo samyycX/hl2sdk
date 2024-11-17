@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright ï¿½ 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose: 
 //
@@ -8,6 +8,7 @@
 #ifndef BASETYPES_H
 #define BASETYPES_H
 
+#include <cstdint>
 #include "tier0/platform.h"
 #include "commonmacros.h"
 #include "wchartypes.h"
@@ -17,6 +18,12 @@
 #ifdef _WIN32
 #pragma once
 #endif
+
+
+// This is a trick to get the DLL extension off the -D option on the command line.
+#define DLLExtTokenPaste(x) #x
+#define DLLExtTokenPaste2(x) DLLExtTokenPaste(x)
+#define DLL_EXT_STRING DLLExtTokenPaste2( _DLL_EXT )
 
 
 #include "protected_things.h"
@@ -37,12 +44,6 @@
 #define NULL 0
 #endif
 
-#if defined _LINUX && !defined __APPLE__
-typedef unsigned int uintptr_t;
-#elif defined __APPLE__
-#include <stdint.h>
-#endif
-
 #define ExecuteNTimes( nTimes, x )	\
 	{								\
 		static int __executeCount=0;\
@@ -60,7 +61,16 @@ typedef unsigned int uintptr_t;
 template <typename T>
 inline T AlignValue( T val, unsigned alignment )
 {
-	return (T)( ( (uintptr_t)val + alignment - 1 ) & ~( alignment - 1 ) );
+	uintp align = alignment;
+	return (T)( ( (uintp)val + align - 1 ) & ~( align - 1 ) );
+}
+
+// Tell MSVC to shut the hell up
+template<>
+inline char* AlignValue( char* val, unsigned alignment )
+{
+	uintptr_t align = alignment;
+	return (char *)( ( reinterpret_cast<uintptr_t>(val) + align - 1 ) & ~( align - 1 ) );
 }
 
 
@@ -99,16 +109,38 @@ FORCEINLINE float fpmax( float a, float b )
 #endif
 
 #ifdef __cplusplus
-	template< class T >
-	inline T clamp( T const &val, T const &minVal, T const &maxVal )
-	{
-		if( val < minVal )
-			return minVal;
-		else if( val > maxVal )
-			return maxVal;
-		else
-			return val;
-	}
+
+// This is the preferred clamp operator. Using the clamp macro can lead to
+// unexpected side-effects or more expensive code. Even the clamp (all
+// lower-case) function can generate more expensive code because of the
+// mixed types involved.
+template< class T >
+T Clamp( T const &val, T const &minVal, T const &maxVal )
+{
+	if( val < minVal )
+		return minVal;
+	else if( val > maxVal )
+		return maxVal;
+	else
+		return val;
+}
+
+// This is the preferred Min operator. Using the MIN macro can lead to unexpected
+// side-effects or more expensive code.
+template< class T >
+T Min( T const &val1, T const &val2 )
+{
+	return val1 < val2 ? val1 : val2;
+}
+
+// This is the preferred Max operator. Using the MAX macro can lead to unexpected
+// side-effects or more expensive code.
+template< class T >
+T Max( T const &val1, T const &val2 )
+{
+	return val1 > val2 ? val1 : val2;
+}
+
 #endif
 
 #ifndef FALSE
@@ -116,18 +148,7 @@ FORCEINLINE float fpmax( float a, float b )
 #define TRUE (!FALSE)
 #endif
 
-
-typedef int BOOL;
 typedef int qboolean;
-typedef unsigned long ULONG;
-typedef unsigned char BYTE;
-typedef unsigned char byte;
-typedef unsigned short word;
-
-#if !defined __APPLE__
-typedef unsigned int uintptr_t;
-#endif
-
 
 enum ThreeState_t
 {
@@ -152,17 +173,17 @@ typedef float vec_t;
 
 #ifdef __cplusplus
 
-inline unsigned long& FloatBits( vec_t& f )
+inline uint32_t& FloatBits( vec_t& f )
 {
-	return *reinterpret_cast<unsigned long*>(&f);
+	return *reinterpret_cast<uint32_t*>(&f);
 }
 
-inline unsigned long const& FloatBits( vec_t const& f )
+inline uint32_t const& FloatBits( vec_t const& f )
 {
-	return *reinterpret_cast<unsigned long const*>(&f);
+	return *reinterpret_cast<uint32_t const*>(&f);
 }
 
-inline vec_t BitsToFloat( unsigned long i )
+inline vec_t BitsToFloat( uint32_t i )
 {
 	return *reinterpret_cast<vec_t*>(&i);
 }
@@ -172,7 +193,7 @@ inline bool IsFinite( vec_t f )
 	return ((FloatBits(f) & 0x7F800000) != 0x7F800000);
 }
 
-inline unsigned long FloatAbsBits( vec_t f )
+inline uint32_t FloatAbsBits( vec_t f )
 {
 	return FloatBits(f) & 0x7FFFFFFF;
 }
@@ -216,7 +237,7 @@ inline float FloatNegate( vec_t f )
 }
 
 
-#define FLOAT32_NAN_BITS     (unsigned long)0x7FC00000	// not a number!
+#define FLOAT32_NAN_BITS     (uint32_t)0x7FC00000	// not a number!
 #define FLOAT32_NAN          BitsToFloat( FLOAT32_NAN_BITS )
 
 #define VEC_T_NAN FLOAT32_NAN
@@ -248,7 +269,7 @@ struct colorVec
 
 
 #ifndef NOTE_UNUSED
-#define NOTE_UNUSED(x)	(x = x)	// for pesky compiler / lint warnings
+#define NOTE_UNUSED(x)	(void)(x)	// for pesky compiler / lint warnings
 #endif
 #ifdef __cplusplus
 
@@ -328,7 +349,7 @@ protected:
 
 
 template< class DummyType >
-class CIntHandle32 : public CBaseIntHandle< unsigned long >
+class CIntHandle32 : public CBaseIntHandle< uint32_t >
 {
 public:
 	inline			CIntHandle32() {}
