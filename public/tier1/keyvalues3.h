@@ -119,7 +119,7 @@ enum
 
 enum
 {
-	KV3_CLUSTER_MAX_ELEMENTS = 63
+	KV3_CLUSTER_MAX_ELEMENTS = 253
 };
 
 enum KV3Type_t : uint8
