@@ -1582,14 +1582,9 @@ void CKeyValues3Table::RemoveMember( KV3MemberId_t id )
 	}
 	else
 	{
-<<<<<<< HEAD
-		delete m_Members[ id ];
-		free( (void*)m_Names[ id ] );
-=======
 		pMembers[ id ]->Free( true );
 		free( pMembers[ id ] );
 		free( (void*)pNames[ id ] );
->>>>>>> 828d6244 (Update & refactor `CKeyValues3Table` container)
 	}
 
 	if ( m_pFastSearch )
