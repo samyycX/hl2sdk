@@ -552,6 +552,7 @@ private:
 
 	friend class CKeyValues3Cluster;
 	friend class CKeyValues3Context;
+	friend class CKeyValues3Table;
 };
 COMPILE_TIME_ASSERT(sizeof(KeyValues3) == 16);
 
