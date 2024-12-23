@@ -114,12 +114,25 @@ typedef int32 KV3MemberId_t;
 
 enum
 {
+	KV3_MIN_CHUNKS = 4,
+	KV3_MAX_CHUNKS = 102261076,
+	KV3_CHUNK_ALIGN = 7,
+	KV3_CHUNK_BITMASK = ~7
+};
+
+enum
+{
+	KV3_TABLE_MAX_FIXED_MEMBERS = 8,
+};
+
+enum
+{
 	KV3_CONTEXT_SIZE = 4608
 };
 
 enum
 {
-	KV3_CLUSTER_MAX_ELEMENTS = 63
+	KV3_CLUSTER_MAX_ELEMENTS = 253
 };
 
 enum KV3Type_t : uint8
@@ -284,6 +297,11 @@ inline int PopCount( uint64 x )
     x = ( x + ( x >> 4 ) ) & 0x0f0f0f0f0f0f0f0full;
     x = ( x * 0x0101010101010101ull ) >> 56;
     return ( int )x;
+}
+
+inline int CalcAlighedChunk( int nCount )
+{
+	return ( KV3_MIN_CHUNKS * nCount + KV3_CHUNK_ALIGN ) & KV3_CHUNK_BITMASK;
 }
 
 }
@@ -455,8 +473,6 @@ public:
 	unsigned int GetMemberHash( KV3MemberId_t id ) const;
 	KeyValues3* FindMember( const CKV3MemberName &name, KeyValues3* defaultValue = NULL );
 	KeyValues3* FindOrCreateMember( const CKV3MemberName &name, bool *pCreated = NULL );
-	bool TableHasBadNames() const;
-	void SetTableHasBadNames( bool bHasBadNames );
 	void SetToEmptyTable();
 	bool RemoveMember( KV3MemberId_t id );
 	bool RemoveMember( const KeyValues3* kv );
@@ -536,6 +552,7 @@ private:
 
 	friend class CKeyValues3Cluster;
 	friend class CKeyValues3Context;
+	friend class CKeyValues3Table;
 };
 COMPILE_TIME_ASSERT(sizeof(KeyValues3) == 16);
 
@@ -562,7 +579,7 @@ public:
 	void Purge( bool bClearingContext );
 
 private:
-	typedef CUtlLeanVectorFixedGrowable<KeyValues3*, 4, int> ElementsVec_t;
+	typedef CUtlLeanVectorFixedGrowable<KeyValues3*, 6, int> ElementsVec_t;
 	
 	int				m_nClusterElement;
 	ElementsVec_t 	m_Elements;  
@@ -571,35 +588,48 @@ private:
 class CKeyValues3Table
 {
 public:
+	typedef uint32			Hash_t;
+	typedef KeyValues3*		Member_t;
+	typedef const char*		Name_t;
+	typedef bool			IsExternalName_t;
+
 	CKeyValues3Table( int cluster_elem = -1 );
 
+	// Gets the base address (can change when adding elements!)
+	void* Base();
+	const void* Base() const { return const_cast<CKeyValues3Table*>(this)->Base(); }
+	Hash_t* HashesBase();
+	const Hash_t* HashesBase() const { return const_cast<CKeyValues3Table*>(this)->HashesBase(); }
+	Member_t* MembersBase();
+	const Member_t* MembersBase() const { return const_cast<CKeyValues3Table*>(this)->MembersBase(); }
+	Name_t* NamesBase();
+	const Name_t* NamesBase() const { return const_cast<CKeyValues3Table*>(this)->NamesBase(); }
+	IsExternalName_t* IsExternalNameBase();
+	const IsExternalName_t* IsExternalNameBase() const { return const_cast<CKeyValues3Table*>(this)->IsExternalNameBase(); }
+
 	int GetClusterElement() const { return m_nClusterElement; }
+	int GetAllocatedChunks() const { return m_nAllocatedChunks; }
 	CKeyValues3TableCluster* GetCluster() const;
 	CKeyValues3Context* GetContext() const;
 
-	int GetMemberCount() const { return m_Hashes.Count(); }
-	KeyValues3* GetMember( KV3MemberId_t id ) { return m_Members[ id ]; }
-	const KeyValues3* GetMember( KV3MemberId_t id ) const { return m_Members[ id ]; }
-	const char* GetMemberName( KV3MemberId_t id ) const { return m_Names[ id ]; }
-	unsigned int GetMemberHash( KV3MemberId_t id ) const { return m_Hashes[ id ]; }
+	int GetMemberCount() const { return m_nCount; }
+	Member_t GetMember( KV3MemberId_t id );
+	const Member_t GetMember( KV3MemberId_t id ) const;
+	const Name_t GetMemberName( KV3MemberId_t id ) const;
+	const Hash_t GetMemberHash( KV3MemberId_t id ) const;
 	void EnableFastSearch();
+	void EnsureMemberCapacity( int num, bool force = false, bool dont_move = false );
 	KV3MemberId_t FindMember( const KeyValues3* kv ) const;
 	KV3MemberId_t FindMember( const CKV3MemberName &name );
 	KV3MemberId_t CreateMember( const CKV3MemberName &name );
-	bool HasBadNames() const { return m_bHasBadNames; }
-	void SetHasBadNames( bool bHasBadNames ) { m_bHasBadNames = bHasBadNames; }
 	void CopyFrom( const CKeyValues3Table* pSrc );
 	void RemoveMember( KV3MemberId_t id );
 	void RemoveAll( int nAllocSize = 0 );
 	void Purge( bool bClearingContext );
 
 private:
-	typedef CUtlLeanVectorFixedGrowable<unsigned int, 8, int>	HashesVec_t;
-	typedef CUtlLeanVectorFixedGrowable<KeyValues3*, 8, int>	MembersVec_t;
-	typedef CUtlLeanVectorFixedGrowable<const char*, 8, int>	NamesVec_t;
-	typedef CUtlLeanVectorFixedGrowable<bool, 8, int>			IsExternalNameVec_t;
-	
 	int m_nClusterElement;
+	int m_nAllocatedChunks;
 
 	struct kv3tablefastsearch_t {
 		kv3tablefastsearch_t() : m_ignore( false ), m_ignores_counter( 0 ) {}
@@ -619,12 +649,32 @@ private:
 		Hashtable_t	m_member_ids;
 	} *m_pFastSearch;
 
-	HashesVec_t 				m_Hashes;
-	MembersVec_t 				m_Members;
-	NamesVec_t 					m_Names;
-	IsExternalNameVec_t			m_IsExternalName; // didn't find this used when deleting a table
-	bool						m_bHasBadNames;
+	int m_nCount;
+	int8 m_nInitialSize;
+	bool m_bIsDynamicallySized;
+
+	union Data_t
+	{
+		struct StaticBuffer_t
+		{
+			static const uintp N = KV3_TABLE_MAX_FIXED_MEMBERS;
+
+			Hash_t m_Hashes[N];
+			Member_t m_Members[N];
+			Name_t m_Names[N];
+			IsExternalName_t m_IsExternalName[N];
+		} m_FixedAlloc;
+
+		union DynamicBuffer_t
+		{
+			Hash_t m_Hash;
+			Member_t m_Member;
+			Name_t m_Name;
+			IsExternalName_t m_IsExternalName;
+		}* m_pChunks;
+	} m_Data;
 };
+COMPILE_TIME_ASSERT(sizeof(CKeyValues3Table) == 192);
 
 class CKeyValues3Cluster
 {
