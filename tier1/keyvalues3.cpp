@@ -1509,8 +1509,11 @@ KV3MemberId_t CKeyValues3Table::CreateMember( const CKV3MemberName &name )
 
 	CKeyValues3Context* context = GetContext();
 
+	Hash_t* pHashes = HashesBase();
 	Member_t* pMembers = MembersBase();
 	Name_t* pNames = NamesBase();
+
+	pHashes[memberId] = name.GetHashCode();
 
 	if ( context )
 	{
