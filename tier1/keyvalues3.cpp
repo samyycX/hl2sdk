@@ -1681,10 +1681,11 @@ void CKeyValues3Table::Purge( bool bClearingContext )
 CKeyValues3Cluster::CKeyValues3Cluster( CKeyValues3Context* context ) : 
 	m_pContext( context ), 
 	m_nAllocatedElements( 0 ),
-	m_pMetaData( NULL ), 
-	m_pNextFree( NULL ) 
+	m_nElementCount( 0 ),
+	m_pPrev( NULL ),
+	m_pNext( NULL ),
+	m_pMetaData( NULL )
 {
-	memset( &m_KeyValues, 0, sizeof( m_KeyValues ) );
 }
 
 CKeyValues3Cluster::~CKeyValues3Cluster() 
@@ -1699,7 +1700,7 @@ KeyValues3* CKeyValues3Cluster::Alloc( KV3TypeEx_t type, KV3SubType_t subtype )
 	Assert( IsFree() );
 	int element = KV3Helpers::BitScanFwd( ~m_nAllocatedElements );
 	m_nAllocatedElements |= ( 1ull << element );
-	KeyValues3* kv = &m_KeyValues[ element ];
+	KeyValues3* kv = &m_KeyValues[ element ].m_KeyValue;
 	new( kv ) KeyValues3( element, type, subtype );
 	return kv;
 }
@@ -1709,7 +1710,7 @@ KeyValues3* CKeyValues3Cluster::Alloc( KV3TypeEx_t type, KV3SubType_t subtype )
 void CKeyValues3Cluster::Free( int element )
 {
 	Assert( element >= 0 && element < KV3_CLUSTER_MAX_ELEMENTS );
-	KeyValues3* kv = &m_KeyValues[ element ];
+	KeyValues3* kv = &m_KeyValues[ element ].m_KeyValue;
 	Destruct( kv );
 	memset( (void *)kv, 0, sizeof( KeyValues3 ) );
 	m_nAllocatedElements &= ~( 1ull << element );
@@ -1721,7 +1722,7 @@ void CKeyValues3Cluster::PurgeElements()
 	for ( int i = 0; i < KV3_CLUSTER_MAX_ELEMENTS; ++i )
 	{
 		if ( ( m_nAllocatedElements & mask ) != 0 )
-			m_KeyValues[ i ].OnClearContext();
+			m_KeyValues[ i ].m_KeyValue.OnClearContext();
 		mask <<= 1;
 	}
 
@@ -1783,9 +1784,21 @@ KV3MetaData_t* CKeyValues3Cluster::GetMetaData( int element ) const
 CKeyValues3ContextBase::CKeyValues3ContextBase( CKeyValues3Context* context ) : 	
 	m_pContext( context ),
 	m_KV3BaseCluster( context ),
-	m_pKV3FreeCluster( &m_KV3BaseCluster ),
-	m_pArrayFreeCluster( NULL ),
-	m_pTableFreeCluster( NULL ),
+	m_pKV3FreeCluster( NULL ),
+	m_pKV3FreeCluster2( NULL ),
+	m_pKV3UnkCluster( NULL ),
+	m_pKV3UnkCluster2( NULL ),
+
+	m_pArrayCluster( NULL ),
+	m_pArrayClusterCopy( NULL ),
+	m_pEmptyArrayCluster( NULL ),
+	m_pEmptyArrayClusterCopy( NULL ),
+
+	m_pTableCluster( NULL ),
+	m_pTableClusterCopy( NULL ),
+	m_nEmptyTableCluster( NULL ),
+	m_nEmptyTableClusterCopy( NULL ),
+
 	m_pParsingErrorListener( NULL )
 {
 }
@@ -1803,29 +1816,22 @@ void CKeyValues3ContextBase::Clear()
 	m_KV3BaseCluster.SetNextFree( NULL );
 	m_pKV3FreeCluster = &m_KV3BaseCluster;
 
-	FOR_EACH_LEANVEC( m_KV3Clusters, iter )
-	{
-		m_KV3Clusters[ iter ]->Clear();
-		m_KV3Clusters[ iter ]->SetNextFree( m_pKV3FreeCluster );
-		m_pKV3FreeCluster = m_KV3Clusters[ iter ];
-	}
-
-	m_pArrayFreeCluster = NULL;
+	m_pArrayCluster = NULL;
 
 	FOR_EACH_LEANVEC( m_ArrayClusters, iter )
 	{
 		m_ArrayClusters[ iter ]->Clear();
-		m_ArrayClusters[ iter ]->SetNextFree( m_pArrayFreeCluster );
-		m_pArrayFreeCluster = m_ArrayClusters[ iter ];
+		m_ArrayClusters[ iter ]->SetNextFree( m_pArrayCluster );
+		m_pArrayCluster = m_ArrayClusters[ iter ];
 	}
 
-	m_pTableFreeCluster = NULL;
+	m_pTableCluster = NULL;
 
 	FOR_EACH_LEANVEC( m_TableClusters, iter )
 	{
 		m_TableClusters[ iter ]->Clear();
-		m_TableClusters[ iter ]->SetNextFree( m_pTableFreeCluster );
-		m_pTableFreeCluster = m_TableClusters[ iter ];
+		m_TableClusters[ iter ]->SetNextFree( m_pTableCluster );
+		m_pTableCluster = m_TableClusters[ iter ];
 	}
 
 	m_Symbols.RemoveAll();
@@ -1838,24 +1844,15 @@ void CKeyValues3ContextBase::Purge()
 	m_BinaryData.Purge();
 
 	m_KV3BaseCluster.Purge();
-	m_KV3BaseCluster.SetNextFree( NULL );
 	m_pKV3FreeCluster = &m_KV3BaseCluster;
-
-	FOR_EACH_LEANVEC( m_KV3Clusters, iter )
-	{
-		m_KV3Clusters[ iter ]->Purge();
-		delete m_KV3Clusters[ iter ];
-	}
-
-	m_KV3Clusters.Purge();
 
 	FOR_EACH_LEANVEC( m_ArrayClusters, iter )
 	{
+		free( m_ArrayClusters[ iter ] );
 		m_ArrayClusters[ iter ]->Purge();
-		delete m_ArrayClusters[ iter ];
 	}
 
-	m_pArrayFreeCluster = NULL;
+	m_pArrayCluster = NULL;
 	m_ArrayClusters.Purge();
 
 	FOR_EACH_LEANVEC( m_TableClusters, iter )
@@ -1864,7 +1861,7 @@ void CKeyValues3ContextBase::Purge()
 		delete m_TableClusters[ iter ];
 	}
 
-	m_pTableFreeCluster = NULL;
+	m_pTableCluster = NULL;
 	m_TableClusters.Purge();
 
 	m_Symbols.Purge();
@@ -1916,7 +1913,7 @@ KeyValues3* CKeyValues3Context::Root()
 		DebuggerBreak();
 	}
 
-	return m_KV3BaseCluster.Head();
+	return &m_KV3BaseCluster.Head()->m_KeyValue;
 }
 
 const char* CKeyValues3Context::AllocString( const char* pString )
@@ -1930,27 +1927,14 @@ void CKeyValues3Context::EnableMetaData( bool bEnable )
 	{
 		m_KV3BaseCluster.EnableMetaData( bEnable );
 
-		for ( int i = 0; i < m_KV3Clusters.Count(); ++i )
-			m_KV3Clusters[ i ]->EnableMetaData( bEnable );
-
 		m_bMetaDataEnabled = bEnable;
 	}
 }
 
 void CKeyValues3Context::CopyMetaData( KV3MetaData_t* pDest, const KV3MetaData_t* pSrc )
 {
-	pDest->m_nLine = pSrc->m_nLine;
-	pDest->m_nColumn = pSrc->m_nColumn;
-	pDest->m_nFlags = pSrc->m_nFlags;
-	pDest->m_sName = m_Symbols.AddString( pSrc->m_sName.String() );
-
-	pDest->m_Comments.Purge();
-	pDest->m_Comments.EnsureCapacity( pSrc->m_Comments.Count() );
-
-	FOR_EACH_MAP_FAST( pSrc->m_Comments, iter )
-	{
-		pDest->m_Comments.Insert( pSrc->m_Comments.Key( iter ), pSrc->m_Comments.Element( iter ) );
-	}
+	pDest->m_pszString = pSrc->m_pszString;
+	pDest->m_pNext = pSrc->m_pNext;
 }
 
 KeyValues3* CKeyValues3Context::AllocKV( KV3TypeEx_t type, KV3SubType_t subtype )
@@ -1972,7 +1956,6 @@ KeyValues3* CKeyValues3Context::AllocKV( KV3TypeEx_t type, KV3SubType_t subtype 
 	{
 		CKeyValues3Cluster* cluster = new CKeyValues3Cluster( m_pContext );
 		cluster->EnableMetaData( m_bMetaDataEnabled );
-		*m_KV3Clusters.AddToTailGetPtr() = cluster;
 		m_pKV3FreeCluster = cluster;
 		kv = cluster->Alloc( type, subtype );
 	}
@@ -1990,5 +1973,5 @@ void CKeyValues3Context::FreeKV( KeyValues3* kv )
 	if ( metadata )
 		metadata->Clear();
 
-	Free<KeyValues3, CKeyValues3Cluster, KV3ClustersVec_t>( kv, &m_KV3BaseCluster, m_pKV3FreeCluster, m_KV3Clusters );
+	Free<KeyValues3, CKeyValues3Cluster>( kv, &m_KV3BaseCluster, m_pKV3FreeCluster );
 }
