@@ -14,10 +14,9 @@ KeyValues3::KeyValues3( KV3TypeEx_t type, KV3SubType_t subtype ) :
 	m_TypeEx( type ),
 	m_SubType( subtype ),
 	m_nFlags( 0 ),
-	m_nClusterElement( 0 ),
-	m_nReserved( 0 ),
+	m_nClusterElement( -1 ),
 	m_nNumArrayElements( 0 ),
-	m_nReserved2( 0 )
+	m_nReserved( 0 )
 {
 	ResolveUnspecified();
 	Alloc();
@@ -29,9 +28,8 @@ KeyValues3::KeyValues3( int cluster_elem, KV3TypeEx_t type, KV3SubType_t subtype
 	m_SubType( subtype ),
 	m_nFlags( 0 ),
 	m_nClusterElement( cluster_elem ),
-	m_nReserved( 0 ),
 	m_nNumArrayElements( 0 ),
-	m_nReserved2( 0 )
+	m_nReserved( 0 )
 {
 	ResolveUnspecified();
 	Alloc();
