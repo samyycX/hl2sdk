@@ -2354,8 +2354,18 @@ void CKeyValues3Context::EnableMetaData( bool bEnable )
 
 void CKeyValues3Context::CopyMetaData( KV3MetaData_t* pDest, const KV3MetaData_t* pSrc )
 {
-	pDest->m_pszString = pSrc->m_pszString;
-	pDest->m_pNext = pSrc->m_pNext;
+	pDest->m_nLine = pSrc->m_nLine;
+	pDest->m_nColumn = pSrc->m_nColumn;
+	pDest->m_nFlags = pSrc->m_nFlags;
+	pDest->m_sName = m_Symbols.AddString( pSrc->m_sName.String() );
+
+	pDest->m_Comments.Purge();
+	pDest->m_Comments.EnsureCapacity( pSrc->m_Comments.Count() );
+
+	FOR_EACH_MAP_FAST( pSrc->m_Comments, iter )
+	{
+		pDest->m_Comments.Insert( pSrc->m_Comments.Key( iter ), pSrc->m_Comments.Element( iter ) );
+	}
 }
 
 KeyValues3* CKeyValues3Context::AllocKV( KV3TypeEx_t type, KV3SubType_t subtype )

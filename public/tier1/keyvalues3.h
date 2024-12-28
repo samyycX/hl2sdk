@@ -312,26 +312,33 @@ inline int CalcAlighedChunk( int nCount )
 
 struct KV3MetaData_t
 {
-	KV3MetaData_t() : m_pNext( NULL ), m_pszString( NULL ) {}
-
-	void Purge()
-	{
-		if ( m_pszString )
-		{
-			free( m_pszString );
-		}
-	}
+	KV3MetaData_t() : m_nLine( 0 ), m_nColumn( 0 ), m_nFlags( 0 ) {}
 
 	void Clear()
 	{
-		Purge();
-
-		m_pNext = NULL;
-		m_pszString = NULL;
+		m_nLine = 0;
+		m_nColumn = 0;
+		m_nFlags = 0;
+		m_sName = CUtlSymbolLarge();
+		m_Comments.RemoveAll();
 	}
 
-	KV3MetaData_t *m_pNext;
-	char *m_pszString;
+	void Purge()
+	{
+		m_nLine = 0;
+		m_nColumn = 0;
+		m_nFlags = 0;
+		m_sName = CUtlSymbolLarge();
+		m_Comments.Purge();
+	}
+
+	typedef CUtlMap<int, CBufferStringGrowable<8>, int, CDefLess<int>> CommentsMap_t;
+
+	int 			m_nLine;
+	int 			m_nColumn;
+	uint			m_nFlags;
+	CUtlSymbolLarge m_sName;
+	CommentsMap_t 	m_Comments;
 };
 
 struct KV3BinaryBlob_t
