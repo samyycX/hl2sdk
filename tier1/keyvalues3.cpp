@@ -1027,7 +1027,7 @@ const char* KeyValues3::ToString( CBufferString& buff, uint flags ) const
 						bool unprintable = false;
 						CBufferStringGrowable<128> temp;
 
-						KeyValues3** arr = m_Data.m_pArray->Base();
+						CKeyValues3Array::Element_t* arr = m_Data.m_pArray->Base();
 						for ( int i = 0; i < elements; ++i )
 						{
 							switch ( arr[i]->GetType() )
@@ -1248,21 +1248,15 @@ KeyValues3& KeyValues3::operator=( const KeyValues3& src )
 }
 
 CKeyValues3Array::CKeyValues3Array( int alloc_size, int cluster_elem ) :
-	m_nCount(0),
-	m_bIsDynamicallySized(false)
+	m_nClusterElement( cluster_elem ),
+	m_nAllocatedChunks( alloc_size ),
+	m_nCount( 0 ),
+	m_nInitialSize( MIN( alloc_size, 255 ) ),
+	m_bIsDynamicallySized( false ),
+	m_unk001( false ),
+	m_unk002( false ),
+	m_pDynamicElements( nullptr )
 {
-	m_nClusterElement = cluster_elem;
-
-	if ( alloc_size >= 256 )
-	{
-		m_nInitialSize = -1;
-		m_nAllocatedChunks = alloc_size;
-	}
-	else
-	{
-		m_nInitialSize = KV3_ARRAY_MAX_FIXED_MEMBERS;
-		m_nAllocatedChunks = KV3_ARRAY_MAX_FIXED_MEMBERS;
-	}
 }
 
 CKeyValues3ArrayCluster* CKeyValues3Array::GetCluster() const
@@ -1283,14 +1277,6 @@ CKeyValues3Context* CKeyValues3Array::GetContext() const
 		return NULL;
 }
 
-KeyValues3** CKeyValues3Array::Base()
-{
-	if ( m_bIsDynamicallySized )
-		return &m_Data.m_pChunks[0];
-
-	return &m_Data.m_Members[0];
-}
-
 KeyValues3* CKeyValues3Array::Element( int i )
 {
 	Assert( 0 <= i && i < m_nCount );
@@ -1306,7 +1292,7 @@ void CKeyValues3Array::SetCount( int count, KV3TypeEx_t type, KV3SubType_t subty
 
 	for ( int i = count; i < nOldSize; ++i )
 	{
-		KeyValues3 *pElement = m_Data.m_Members[i];
+		Element_t pElement = m_StaticElements[i];
 
 		if ( context )
 			context->FreeKV( pElement );
@@ -1317,15 +1303,16 @@ void CKeyValues3Array::SetCount( int count, KV3TypeEx_t type, KV3SubType_t subty
 		}
 	}
 
-	KeyValues3 **pNew = &m_Data.m_Members[0];
+	Element_t *pNew = &m_StaticElements[0];
 
 	if ( count > MAX( KV3_ARRAY_MAX_FIXED_MEMBERS, m_nAllocatedChunks ) )
 	{
-		pNew = (KeyValues3**)( m_bIsDynamicallySized ? realloc( m_Data.m_pChunks, count ) : malloc( count ) );
+		int new_byte_size = TotalSizeOfData( count );
+		pNew = (Element_t *)( m_bIsDynamicallySized ? realloc( m_pDynamicElements, new_byte_size ) : malloc( new_byte_size ) );
 
-		memmove( pNew, Base(), count * sizeof(KeyValues3*) );
+		memmove( pNew, Base(), count * sizeof(Element_t) );
 
-		m_Data.m_pChunks = pNew;
+		m_pDynamicElements = pNew;
 
 		if ( count > m_nAllocatedChunks )
 		{
@@ -1346,9 +1333,9 @@ void CKeyValues3Array::SetCount( int count, KV3TypeEx_t type, KV3SubType_t subty
 	m_nCount = count;
 }
 
-KeyValues3** CKeyValues3Array::InsertBeforeGetPtr( int elem, int num )
+CKeyValues3Array::Element_t* CKeyValues3Array::InsertBeforeGetPtr( int elem, int num )
 {
-	KeyValues3** kv = Base();
+	Element_t *kv = Base();
 
 	CKeyValues3Context* context = GetContext();
 
@@ -1415,29 +1402,22 @@ void CKeyValues3Array::Purge( bool bClearingContext )
 	}
 
 	if ( m_bIsDynamicallySized )
-		free( m_Data.m_pChunks );
+		free( m_pDynamicElements );
 
 	m_nCount = 0;
 }
 
 CKeyValues3Table::CKeyValues3Table( int alloc_size, int cluster_elem ) :
 	m_nClusterElement( cluster_elem ),
-	m_pFastSearch( NULL ),
+	m_nAllocatedChunks( alloc_size ),
+	m_pFastSearch( nullptr ),
 	m_nCount( 0 ),
+	m_nInitialSize( MIN( alloc_size, 255 ) ),
 	m_bIsDynamicallySized( false ),
 	m_unk001( false ),
-	m_unk002( false )
+	m_unk002( false ),
+	m_pDynamicBuffer( nullptr )
 {
-	if (alloc_size >= 256)
-	{
-		m_nInitialSize = -1;
-		m_nAllocatedChunks = alloc_size;
-	}
-	else
-	{
-		m_nInitialSize = KV3_TABLE_MAX_FIXED_MEMBERS;
-		m_nAllocatedChunks = KV3_TABLE_MAX_FIXED_MEMBERS;
-	}
 }
 
 CKeyValues3TableCluster* CKeyValues3Table::GetCluster() const

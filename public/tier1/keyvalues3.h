@@ -574,25 +574,41 @@ COMPILE_TIME_ASSERT(sizeof(KeyValues3) == 16);
 class CKeyValues3Array
 {
 public:
-	CKeyValues3Array( int alloc_size = 0, int cluster_elem = -1 );
+	typedef KeyValues3 *Element_t;
+
+	static const size_t DATA_ALIGNMENT = KV3Helpers::PackAlignOf<Element_t>();
+
+	CKeyValues3Array( int alloc_size = KV3_ARRAY_MAX_FIXED_MEMBERS, int cluster_elem = -1 );
 
 	int GetClusterElement() const { return m_nClusterElement; }
 	CKeyValues3ArrayCluster* GetCluster() const;
 	CKeyValues3Context* GetContext() const;
 
-	KeyValues3** Base();
-	KeyValues3* const * Base() const { return const_cast<CKeyValues3Array*>(this)->Base(); }
-	KeyValues3* Element( int i );
-	const KeyValues3* Element( int i ) const { return const_cast<CKeyValues3Array*>(this)->Element( i ); }
+	Element_t *Base() { return IsBaseStatic() ? &m_StaticElements[0] : m_pDynamicElements; };
+	Element_t const *Base() const { return const_cast<CKeyValues3Array *>(this)->Base(); }
+
+	Element_t Element( int i );
+	const Element_t Element( int i ) const { return const_cast<CKeyValues3Array*>(this)->Element( i ); }
 	int Count() const { return m_nCount; }
 
 	void SetCount( int count, KV3TypeEx_t type = KV3_TYPEEX_NULL, KV3SubType_t subtype = KV3_SUBTYPE_UNSPECIFIED );
-	KeyValues3** InsertBeforeGetPtr( int elem, int num );
+	Element_t* InsertBeforeGetPtr( int elem, int num );
 	void CopyFrom( const CKeyValues3Array* pSrc );
 	void RemoveMultiple( int elem, int num );
 	void Purge( bool bClearingContext );
 
-public:
+	static constexpr size_t TotalSizeOf( int initial_size ) { return ALIGN_VALUE( TotalSizeWithoutStaticData() + TotalSizeOfData( MAX( initial_size, 0 ) ), 8 ); }
+	static constexpr size_t TotalSizeOfData( int size ) { return MAX( (KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Element_t>( size )), sizeof( m_pDynamicElements ) ); }
+	static constexpr size_t TotalSizeOfStaticData() { return sizeof( m_StaticElements ); }
+	static constexpr size_t TotalSizeWithoutStaticData() { return sizeof( CKeyValues3Array ) - sizeof( m_StaticElements ); }
+
+private:
+	int GetAllocatedChunks() const { return m_nAllocatedChunks; }
+	bool IsBaseStatic() { return !m_bIsDynamicallySized; }
+
+	size_t GetAllocatedBytesSize() const { return TotalSizeOfData( GetAllocatedChunks() ); }
+
+private:
 	int m_nClusterElement;
 	int m_nAllocatedChunks;
 
@@ -600,11 +616,14 @@ public:
 	int8 m_nInitialSize;
 	bool m_bIsDynamicallySized;
 
-	union Data_t
+	bool m_unk001;
+	bool m_unk002;
+
+	union
 	{
-		KeyValues3* m_Members[KV3_ARRAY_MAX_FIXED_MEMBERS];
-		KeyValues3** m_pChunks;
-	} m_Data;
+		Element_t m_StaticElements[KV3_ARRAY_MAX_FIXED_MEMBERS];
+		Element_t *m_pDynamicElements;
+	};
 };
 COMPILE_TIME_ASSERT(sizeof(CKeyValues3Array) == 64);
 
@@ -618,7 +637,7 @@ public:
 
 	static const size_t DATA_ALIGNMENT = KV3Helpers::PackAlignOf<Hash_t, Member_t, Name_t, IsExternalName_t>();
 
-	CKeyValues3Table( int alloc_size = 0, int cluster_elem = -1 );
+	CKeyValues3Table( int alloc_size = KV3_TABLE_MAX_FIXED_MEMBERS, int cluster_elem = -1 );
 
 	int GetClusterElement() const { return m_nClusterElement; }
 	CKeyValues3TableCluster* GetCluster() const;
