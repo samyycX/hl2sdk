@@ -93,7 +93,7 @@ void KeyValues3::Alloc( int nAllocSize, Data_t Data, int nValidBytes, KV3TypeEx_
 			}
 			else
 			{
-				int nSize = nValidBytes > 0 ? ( nAllocSize * 17 + KV3Helpers::CalcAlighedChunk(nAllocSize) + sizeof(CKeyValues3Table) / 8 ) : 32;
+				int nSize = CKeyValues3Table::TotalSizeOf( nAllocSize );
 
 				if( nSize > nValidBytes )
 				{
@@ -139,11 +139,10 @@ CKeyValues3Table* KeyValues3::AllocTable( int nAllocSize )
 			int iTableClusterSize = context->GetTableClusterSize();
 			int iTableClusterAllocationCount = context->GetTableClusterAllocationCount();
 
-			int nNewSize = nAllocSize > 0 ? ( KV3Helpers::CalcAlighedChunk( nAllocSize ) * 17 * nAllocSize + 31 ) : 39;
-			const int nNewSizeDiff = ( nNewSize & KV3_CHUNK_BITMASK ) + sizeof(void*);
+			int nNewSize = CKeyValues3Table::TotalSizeOf( nAllocSize ) + 8;
 
 			if ( iTableClusterSize >= iTableClusterAllocationCount ||
-			     nNewSizeDiff > ( iTableClusterAllocationCount - iTableClusterSize ) )
+				 nNewSize > ( iTableClusterAllocationCount - iTableClusterSize ) )
 			{
 				if ( nAllocSize <= KV3_TABLE_MAX_FIXED_MEMBERS )
 				{
@@ -158,23 +157,24 @@ CKeyValues3Table* KeyValues3::AllocTable( int nAllocSize )
 
 				pResult = &pNewTableNode->m_Table;
 
-				const int nMinAllocated = std::numeric_limits<int>::digits;
-				const int nMaxAllocated = (std::numeric_limits<int>::max)();
-				int nNewAllocated = nNewSizeDiff + iTableClusterSize;
+				int nNewAllocated = nNewSize + iTableClusterSize;
 
 				while ( nNewAllocated < iTableClusterAllocationCount )
 				{
-					if ( iTableClusterAllocationCount < nMaxAllocated/2 )
-						iTableClusterAllocationCount = MAX( iTableClusterAllocationCount*2, nMinAllocated );
+					if ( iTableClusterAllocationCount < INT_MAX / 2 )
+						iTableClusterAllocationCount = MAX( iTableClusterAllocationCount * 2, CKeyValues3Table::TotalSizeOf( 0 ) );
 					else
-						iTableClusterAllocationCount = nMaxAllocated;
+					{
+						iTableClusterAllocationCount = INT_MAX;
+						break;
+					}
 				}
 
 				context->m_pDynamicTable = (CKeyValues3Table*)realloc( pDynamicTable, nNewAllocated );
 				context->m_nTableClusterSize = nNewAllocated;
 				context->m_nTableClusterAllocationCount = iTableClusterAllocationCount;
 
-				pNewTableNode->m_pNextFree = (KeyValues3TableNode*)( (uintp)pNewTableNode + nNewSizeDiff );
+				pNewTableNode->m_pNextFree = (KeyValues3TableNode*)( (uintp)pNewTableNode + nNewSize);
 
 				Construct( pResult, nAllocSize );
 			}
@@ -187,7 +187,7 @@ CKeyValues3Table* KeyValues3::AllocTable( int nAllocSize )
 	if ( nAllocSize <= 0 )
 		nAllocSize = KV3_TABLE_MAX_FIXED_MEMBERS;
 
-	pResult = (CKeyValues3Table*)g_pMemAlloc->RegionAlloc( MEMALLOC_REGION_ALLOC_4, KV3Helpers::CalcAlighedChunk( nAllocSize ) + 17 * nAllocSize + 24 );
+	pResult = (CKeyValues3Table*)g_pMemAlloc->RegionAlloc( MEMALLOC_REGION_ALLOC_4, CKeyValues3Table::TotalSizeOf( nAllocSize ) );
 	Construct( pResult, nAllocSize );
 
 	return pResult;
@@ -1424,7 +1424,9 @@ CKeyValues3Table::CKeyValues3Table( int alloc_size, int cluster_elem ) :
 	m_nClusterElement( cluster_elem ),
 	m_pFastSearch( NULL ),
 	m_nCount( 0 ),
-	m_bIsDynamicallySized( false )
+	m_bIsDynamicallySized( false ),
+	m_unk001( false ),
+	m_unk002( false )
 {
 	if (alloc_size >= 256)
 	{
@@ -1436,56 +1438,6 @@ CKeyValues3Table::CKeyValues3Table( int alloc_size, int cluster_elem ) :
 		m_nInitialSize = KV3_TABLE_MAX_FIXED_MEMBERS;
 		m_nAllocatedChunks = KV3_TABLE_MAX_FIXED_MEMBERS;
 	}
-}
-
-
-//-----------------------------------------------------------------------------
-// Gets the base address (can change when adding elements!)
-//-----------------------------------------------------------------------------
-
-inline void* CKeyValues3Table::Base()
-{
-	if ( m_nCount )
-	{
-		if ( m_bIsDynamicallySized )
-			return m_Data.m_pChunks;
-
-		return &m_Data.m_FixedAlloc;
-	}
-
-	return NULL;
-}
-
-CKeyValues3Table::Hash_t* CKeyValues3Table::HashesBase()
-{
-	if ( m_bIsDynamicallySized )
-		return &m_Data.m_pChunks[0].m_Hash;
-
-	return &m_Data.m_FixedAlloc.m_Hashes[0];
-}
-
-CKeyValues3Table::Member_t* CKeyValues3Table::MembersBase()
-{
-	if ( m_bIsDynamicallySized )
-		return &m_Data.m_pChunks[KV3Helpers::CalcAlighedChunk( m_nAllocatedChunks ) / 8].m_Member;
-
-	return &m_Data.m_FixedAlloc.m_Members[0];
-}
-
-CKeyValues3Table::Name_t* CKeyValues3Table::NamesBase()
-{
-	if ( m_bIsDynamicallySized )
-		return &m_Data.m_pChunks[( KV3Helpers::CalcAlighedChunk( m_nAllocatedChunks ) / 8 ) + m_nAllocatedChunks].m_Name;
-
-	return &m_Data.m_FixedAlloc.m_Names[0];
-}
-
-CKeyValues3Table::IsExternalName_t* CKeyValues3Table::IsExternalNameBase()
-{
-	if ( m_bIsDynamicallySized )
-		return &m_Data.m_pChunks[( KV3Helpers::CalcAlighedChunk( m_nAllocatedChunks ) / 8 ) + m_nAllocatedChunks * 2].m_IsExternalName;
-
-	return &m_Data.m_FixedAlloc.m_IsExternalName[0];
 }
 
 CKeyValues3TableCluster* CKeyValues3Table::GetCluster() const
@@ -1550,11 +1502,9 @@ void CKeyValues3Table::EnsureMemberCapacity( int num, bool force, bool dont_move
 	if ( num <= m_nAllocatedChunks )
 		return;
 
-	const int nMinAllocated = KV3_MIN_CHUNKS;
-	const int nMaxAllocated = KV3_MAX_CHUNKS;
 	int nNewAllocatedChunks = m_nAllocatedChunks;
 
-	if ( num > nMaxAllocated )
+	if ( num > KV3_MAX_CHUNKS)
 	{
 		Plat_FatalErrorFunc( "%s member count overflow (%u)\n", __FUNCTION__, num );
 		DebuggerBreak();
@@ -1566,50 +1516,44 @@ void CKeyValues3Table::EnsureMemberCapacity( int num, bool force, bool dont_move
 	}
 	else
 	{
-		if ( nNewAllocatedChunks < nMinAllocated )
-			nNewAllocatedChunks = nMinAllocated;
+		nNewAllocatedChunks = MAX( KV3_MIN_CHUNKS, nNewAllocatedChunks );
 
 		while ( nNewAllocatedChunks < num )
 		{
-			if ( nNewAllocatedChunks < nMaxAllocated/2 )
-				nNewAllocatedChunks = MAX( nNewAllocatedChunks*2, nMinAllocated );
+			if ( nNewAllocatedChunks < KV3_MAX_CHUNKS / 2 )
+				nNewAllocatedChunks = nNewAllocatedChunks * 2;
 			else
-				nNewAllocatedChunks = nMaxAllocated;
+			{
+				nNewAllocatedChunks = KV3_MAX_CHUNKS;
+				break;
+			}
 		}
 	}
 
-	const int nAllocatedChunksSize = nNewAllocatedChunks * sizeof(void*);
-	const int nAllocatedChunksDoubleSize = nAllocatedChunksSize * 2;
-	const int nAlignedChunk = KV3Helpers::CalcAlighedChunk( nNewAllocatedChunks );
-	const int nNewSize = nAlignedChunk + nNewAllocatedChunks * ( sizeof(Member_t) + sizeof(Name_t) + sizeof(IsExternalName_t) );
+	const int new_byte_size = TotalSizeOfData( nNewAllocatedChunks );
+	void* new_base = m_bIsDynamicallySized ? realloc( m_pDynamicBuffer, new_byte_size ) : malloc( new_byte_size );
 
-	void* pNew = m_bIsDynamicallySized ? realloc( m_Data.m_pChunks, nNewSize ) : malloc( nNewSize );
+	if(m_nCount == 0)
+		dont_move = true;
 
-	uintp nNewAddress = (uintp)pNew;
-
-	bool bDontMove = true;
-
-	if ( m_nCount )
-		bDontMove = dont_move;
-
-	if ( !bDontMove )
+	if ( !dont_move )
 	{
 		if ( m_bIsDynamicallySized )
 		{
-			memmove( (void*)( nNewAddress + nAlignedChunk + nAllocatedChunksDoubleSize ), IsExternalNameBase(), m_nCount * sizeof(IsExternalName_t) );
-			memmove( (void*)( nNewAddress + nAlignedChunk + nAllocatedChunksSize ), NamesBase(), m_nCount * sizeof(Name_t) );
-			memmove( (void*)( nNewAddress + nAlignedChunk ), MembersBase(), m_nCount * sizeof(Member_t) );
+			memmove( (uint8 *)new_base + OffsetToIsExternalNameBase( nNewAllocatedChunks ), IsExternalNameBase(), m_nCount * sizeof(IsExternalName_t) );
+			memmove( (uint8 *)new_base + OffsetToNamesBase( nNewAllocatedChunks ), NamesBase(), m_nCount * sizeof(Name_t) );
+			memmove( (uint8 *)new_base + OffsetToMembersBase( nNewAllocatedChunks ), MembersBase(), m_nCount * sizeof(Member_t) );
 		}
 		else
 		{
-			memmove( pNew, HashesBase(), m_nAllocatedChunks * sizeof(Hash_t) );
-			memmove( (void*)( nNewAddress + nAlignedChunk ), MembersBase(), m_nAllocatedChunks * sizeof(Member_t) );
-			memmove( (void*)( nNewAddress + nAlignedChunk + nAllocatedChunksSize ), NamesBase(), m_nAllocatedChunks * sizeof(Name_t) );
-			memmove( (void*)( nNewAddress + nAlignedChunk + nAllocatedChunksDoubleSize ), IsExternalNameBase(), m_nCount * sizeof(IsExternalName_t) );
+			memmove( (uint8 *)new_base + OffsetToHashesBase( nNewAllocatedChunks ), HashesBase(), m_nCount * sizeof(Hash_t) );
+			memmove( (uint8 *)new_base + OffsetToMembersBase( nNewAllocatedChunks ), MembersBase(), m_nCount * sizeof(Member_t) );
+			memmove( (uint8 *)new_base + OffsetToNamesBase( nNewAllocatedChunks ), NamesBase(), m_nCount * sizeof(Name_t) );
+			memmove( (uint8 *)new_base + OffsetToIsExternalNameBase( nNewAllocatedChunks ), IsExternalNameBase(), m_nCount * sizeof(IsExternalName_t) );
 		}
 	}
 
-	m_Data.m_pChunks = (Data_t::DynamicBuffer_t *)pNew;
+	m_pDynamicBuffer = new_base;
 	m_nAllocatedChunks = nNewAllocatedChunks;
 	m_bIsDynamicallySized = true;
 }
@@ -1814,7 +1758,7 @@ void CKeyValues3Table::RemoveAll( int nAllocSize )
 	}
 	else if ( m_bIsDynamicallySized )
 	{
-		free( m_Data.m_pChunks );
+		free( m_pDynamicBuffer );
 	}
 	m_nCount = nAllocSize;
 
@@ -1856,7 +1800,7 @@ void CKeyValues3Table::Purge( bool bClearingContext )
 
 	if ( m_bIsDynamicallySized )
 	{
-		free( m_Data.m_pChunks );
+		free( m_pDynamicBuffer );
 	}
 	m_nAllocatedChunks = 0;
 	m_bIsDynamicallySized = false;
@@ -2237,7 +2181,7 @@ CKeyValues3Table* CKeyValues3Context::AllocTable( int nAllocSize )
 {
 	CKeyValues3Table* pTable = nullptr;
 
-	int nSize = nAllocSize > 0 ? ( ( 17 * nAllocSize + ( KV3Helpers::CalcAlighedChunk(nAllocSize) + 31 ) & KV3_CHUNK_BITMASK ) + KV3_TABLE_MAX_FIXED_MEMBERS ) : 40;
+	int nSize = CKeyValues3Table::TotalSizeOf( nAllocSize ) + 8;
 
 	if ( ( m_nTableClusterSize >= m_nTableClusterAllocationCount) || ( m_nTableClusterAllocationCount - m_nTableClusterSize < nSize ) )
 	{

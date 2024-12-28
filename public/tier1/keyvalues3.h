@@ -20,8 +20,6 @@
 #include "Color.h"
 #include "entityhandle.h"
 
-#include <limits>
-
 #include "tier0/memdbgon.h"
 
 class KeyValues3;
@@ -115,26 +113,15 @@ enum
 {
 	KV3_MIN_CHUNKS = 4,
 	KV3_MAX_CHUNKS = 102261076,
-	KV3_CHUNK_ALIGN = 7,
-	KV3_CHUNK_BITMASK = ~7
-};
 
-enum
-{
 	KV3_ARRAY_MAX_FIXED_MEMBERS = 6,
 	KV3_TABLE_MAX_FIXED_MEMBERS = 8,
-};
 
-enum
-{
 	KV3_CONTEXT_SIZE = 4608,
 
 	KV3_ARRAY_INIT_SIZE = 32,
-	KV3_TABLE_INIT_SIZE = 64
-};
+	KV3_TABLE_INIT_SIZE = 64,
 
-enum
-{
 	KV3_CLUSTER_MAX_ELEMENTS = 253
 };
 
@@ -273,41 +260,49 @@ enum KV3MetaDataFlags_t
 
 namespace KV3Helpers
 {
+	// https://www.chessprogramming.org/BitScan
+	inline int BitScanFwd( uint64 bb ) 
+	{
+		static const int index64[64] = {
+			0,  47,  1, 56, 48, 27,  2, 60,
+			57, 49, 41, 37, 28, 16,  3, 61,
+			54, 58, 35, 52, 50, 42, 21, 44,
+			38, 32, 29, 23, 17, 11,  4, 62,
+			46, 55, 26, 59, 40, 36, 15, 53,
+			34, 51, 20, 43, 31, 22, 10, 45,
+			25, 39, 14, 33, 19, 30,  9, 24,
+			13, 18,  8, 12,  7,  6,  5, 63
+		};
 
-// https://www.chessprogramming.org/BitScan
-inline int BitScanFwd( uint64 bb ) 
-{
-	static const int index64[64] = {
-		0,  47,  1, 56, 48, 27,  2, 60,
-		57, 49, 41, 37, 28, 16,  3, 61,
-		54, 58, 35, 52, 50, 42, 21, 44,
-		38, 32, 29, 23, 17, 11,  4, 62,
-		46, 55, 26, 59, 40, 36, 15, 53,
-		34, 51, 20, 43, 31, 22, 10, 45,
-		25, 39, 14, 33, 19, 30,  9, 24,
-		13, 18,  8, 12,  7,  6,  5, 63
-	};
+		const uint64 debruijn64 = 0x03f79d71b4cb0a89ull;
+		Assert( bb != 0 );
+		return index64[ ( ( bb ^ ( bb - 1 ) ) * debruijn64 ) >> 58 ];
+	}
 
-	const uint64 debruijn64 = 0x03f79d71b4cb0a89ull;
-	Assert( bb != 0 );
-	return index64[ ( ( bb ^ ( bb - 1 ) ) * debruijn64 ) >> 58 ];
-}
+	// https://www.chessprogramming.org/Population_Count
+	inline int PopCount( uint64 x )
+	{
+		x =  x - ( ( x >> 1 ) & 0x5555555555555555ull );
+		x = ( x & 0x3333333333333333ull ) + ( ( x >> 2 ) & 0x3333333333333333ull );
+		x = ( x + ( x >> 4 ) ) & 0x0f0f0f0f0f0f0f0full;
+		x = ( x * 0x0101010101010101ull ) >> 56;
+		return ( int )x;
+	}
 
-// https://www.chessprogramming.org/Population_Count
-inline int PopCount( uint64 x )
-{
-	x =  x - ( ( x >> 1 ) & 0x5555555555555555ull );
-    x = ( x & 0x3333333333333333ull ) + ( ( x >> 2 ) & 0x3333333333333333ull );
-    x = ( x + ( x >> 4 ) ) & 0x0f0f0f0f0f0f0f0full;
-    x = ( x * 0x0101010101010101ull ) >> 56;
-    return ( int )x;
-}
+	template <typename T, typename... Ts>
+	constexpr size_t PackAlignOf()
+	{
+		if constexpr (sizeof...(Ts) == 0)
+			return alignof(T);
+		else
+			return (alignof(T) > PackAlignOf<Ts...>()) ? alignof(T) : PackAlignOf<Ts...>();
+	}
 
-inline int CalcAlighedChunk( int nCount )
-{
-	return ( KV3_MIN_CHUNKS * nCount + KV3_CHUNK_ALIGN ) & KV3_CHUNK_BITMASK;
-}
-
+	template<size_t ALIGN, typename... Ts>
+	constexpr size_t PackSizeOf( int size )
+	{
+		return ((ALIGN_VALUE( size * sizeof( Ts ), ALIGN )) + ... + 0);
+	}
 }
 
 struct KV3MetaData_t
@@ -621,22 +616,11 @@ public:
 	typedef const char*		Name_t;
 	typedef bool			IsExternalName_t;
 
+	static const size_t DATA_ALIGNMENT = KV3Helpers::PackAlignOf<Hash_t, Member_t, Name_t, IsExternalName_t>();
+
 	CKeyValues3Table( int alloc_size = 0, int cluster_elem = -1 );
 
-	// Gets the base address (can change when adding elements!)
-	void* Base();
-	const void* Base() const { return const_cast<CKeyValues3Table*>(this)->Base(); }
-	Hash_t* HashesBase();
-	const Hash_t* HashesBase() const { return const_cast<CKeyValues3Table*>(this)->HashesBase(); }
-	Member_t* MembersBase();
-	const Member_t* MembersBase() const { return const_cast<CKeyValues3Table*>(this)->MembersBase(); }
-	Name_t* NamesBase();
-	const Name_t* NamesBase() const { return const_cast<CKeyValues3Table*>(this)->NamesBase(); }
-	IsExternalName_t* IsExternalNameBase();
-	const IsExternalName_t* IsExternalNameBase() const { return const_cast<CKeyValues3Table*>(this)->IsExternalNameBase(); }
-
 	int GetClusterElement() const { return m_nClusterElement; }
-	int GetAllocatedChunks() const { return m_nAllocatedChunks; }
 	CKeyValues3TableCluster* GetCluster() const;
 	CKeyValues3Context* GetContext() const;
 
@@ -645,15 +629,47 @@ public:
 	const Member_t GetMember( KV3MemberId_t id ) const { return const_cast<CKeyValues3Table*>(this)->GetMember( id ); }
 	const Name_t GetMemberName( KV3MemberId_t id ) const;
 	const Hash_t GetMemberHash( KV3MemberId_t id ) const;
+
 	void EnableFastSearch();
 	void EnsureMemberCapacity( int num, bool force = false, bool dont_move = false );
+
 	KV3MemberId_t FindMember( const KeyValues3* kv ) const;
 	KV3MemberId_t FindMember( const CKV3MemberName &name );
 	KV3MemberId_t CreateMember( const CKV3MemberName &name );
+
 	void CopyFrom( const CKeyValues3Table* pSrc );
 	void RemoveMember( KV3MemberId_t id );
 	void RemoveAll( int nAllocSize = 0 );
 	void Purge( bool bClearingContext );
+
+	static constexpr size_t TotalSizeOf( int initial_size ) { return ALIGN_VALUE( TotalSizeWithoutStaticData() + TotalSizeOfData( MAX( initial_size, 0 ) ), 8 ); }
+	static constexpr size_t TotalSizeOfData( int size ) { return MAX( (KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t, Member_t, Name_t, IsExternalName_t>( size )), sizeof(m_pDynamicBuffer) ); }
+	static constexpr size_t TotalSizeOfStaticData() { return sizeof(m_StaticBuffer); }
+	static constexpr size_t TotalSizeWithoutStaticData() { return sizeof(CKeyValues3Table) - sizeof(m_StaticBuffer); }
+
+private:
+	int GetAllocatedChunks() const { return m_nAllocatedChunks; }
+	bool IsBaseStatic() { return !m_bIsDynamicallySized; }
+
+	size_t GetAllocatedBytesSize() const { return TotalSizeOfData( GetAllocatedChunks() ); }
+
+	constexpr size_t OffsetToHashesBase( int size ) const { return 0; }
+	constexpr size_t OffsetToMembersBase( int size ) const { return KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t>( size ); }
+	constexpr size_t OffsetToNamesBase( int size ) const { return KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t, Member_t>( size ); }
+	constexpr size_t OffsetToIsExternalNameBase( int size ) const { return KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t, Member_t, Name_t>( size ); }
+
+	// Gets the base address (can change when adding elements!)
+	void *Base() { return IsBaseStatic() ? &m_StaticBuffer : m_pDynamicBuffer; };
+	Hash_t *HashesBase() { return reinterpret_cast<Hash_t *>((uint8 *)Base() + OffsetToHashesBase( GetAllocatedChunks() )); }
+	Member_t *MembersBase() { return reinterpret_cast<Member_t *>((uint8 *)Base() + OffsetToMembersBase( GetAllocatedChunks() )); }
+	Name_t *NamesBase() { return reinterpret_cast<Name_t *>((uint8 *)Base() + OffsetToNamesBase( GetAllocatedChunks() )); }
+	IsExternalName_t *IsExternalNameBase() { return reinterpret_cast<IsExternalName_t *>((uint8 *)Base() + OffsetToIsExternalNameBase( GetAllocatedChunks() )); }
+
+	const void *Base() const { return const_cast<void *>(Base()); }
+	const Hash_t *HashesBase() const { return const_cast<Hash_t *>(HashesBase()); }
+	const Member_t *MembersBase() const { return const_cast<Member_t *>(MembersBase()); }
+	const Name_t *NamesBase() const { return const_cast<Name_t *>(NamesBase()); }
+	const IsExternalName_t *IsExternalNameBase() const { return const_cast<IsExternalName_t *>(IsExternalNameBase()); }
 
 private:
 	int m_nClusterElement;
@@ -678,29 +694,25 @@ private:
 	} *m_pFastSearch;
 
 	int m_nCount;
+
 	int8 m_nInitialSize;
 	bool m_bIsDynamicallySized;
 
-	union Data_t
+	bool m_unk001;
+	bool m_unk002;
+
+	union
 	{
-		struct StaticBuffer_t
+		struct
 		{
-			static const uintp N = KV3_TABLE_MAX_FIXED_MEMBERS;
+			Hash_t m_Hashes[KV3_TABLE_MAX_FIXED_MEMBERS];
+			Member_t m_Members[KV3_TABLE_MAX_FIXED_MEMBERS];
+			Name_t m_Names[KV3_TABLE_MAX_FIXED_MEMBERS];
+			IsExternalName_t m_IsExternalName[KV3_TABLE_MAX_FIXED_MEMBERS];
+		} m_StaticBuffer;
 
-			Hash_t m_Hashes[N];
-			Member_t m_Members[N];
-			Name_t m_Names[N];
-			IsExternalName_t m_IsExternalName[N];
-		} m_FixedAlloc;
-
-		union DynamicBuffer_t
-		{
-			Hash_t m_Hash;
-			Member_t m_Member;
-			Name_t m_Name;
-			IsExternalName_t m_IsExternalName;
-		}* m_pChunks;
-	} m_Data;
+		void* m_pDynamicBuffer;
+	};
 };
 COMPILE_TIME_ASSERT(sizeof(CKeyValues3Table) == 192);
 
