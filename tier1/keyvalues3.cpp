@@ -362,7 +362,7 @@ CKeyValues3Cluster* KeyValues3::GetCluster() const
 	if ( m_bExternalStorage )
 		return NULL;
 
-	return GET_OUTER( CKeyValues3Cluster, m_KeyValues[ m_nClusterElement ] );
+	return GET_OUTER( CKeyValues3Cluster, m_Values[ m_nClusterElement ] );
 }
 
 CKeyValues3Context* KeyValues3::GetContext() const
@@ -1264,7 +1264,7 @@ CKeyValues3ArrayCluster* CKeyValues3Array::GetCluster() const
 	if ( m_nClusterElement == -1 )
 		return NULL;
 
-	return GET_OUTER( CKeyValues3ArrayCluster, m_Elements[ m_nClusterElement ] );
+	return GET_OUTER( CKeyValues3ArrayCluster, m_Values[ m_nClusterElement ] );
 }
 
 CKeyValues3Context* CKeyValues3Array::GetContext() const
@@ -1425,7 +1425,7 @@ CKeyValues3TableCluster* CKeyValues3Table::GetCluster() const
 	if ( m_nClusterElement == -1 )
 		return NULL;
 
-	return GET_OUTER( CKeyValues3TableCluster, m_Elements[ m_nClusterElement ] );
+	return GET_OUTER( CKeyValues3TableCluster, m_Values[ m_nClusterElement ] );
 }
 
 CKeyValues3Context* CKeyValues3Table::GetContext() const
@@ -1791,178 +1791,6 @@ void CKeyValues3Table::Purge( bool bClearingContext )
 	m_pFastSearch = NULL;
 }
 
-CKeyValues3BaseCluster::CKeyValues3BaseCluster( CKeyValues3Context* context ) : 
-	m_pContext( context ), 
-	m_nAllocatedElements( -1 ),
-	m_nElementCount( 0 ),
-	m_pPrev( NULL ),
-	m_pNext( NULL ),
-	m_pMetaData( NULL )
-{
-}
-
-void CKeyValues3BaseCluster::Purge()
-{
-	m_nAllocatedElements = 0;
-}
-
-void CKeyValues3BaseCluster::EnableMetaData( bool bEnable )
-{
-	if ( bEnable )
-	{
-		if ( !m_pMetaData )
-			m_pMetaData = new kv3metadata_t;
-	}
-	else
-	{
-		FreeMetaData();
-	}
-}
-
-void CKeyValues3BaseCluster::FreeMetaData()
-{
-	if ( m_pMetaData )
-	{
-		free( m_pMetaData );
-	}
-	m_pMetaData = NULL;
-}
-
-KV3MetaData_t* CKeyValues3BaseCluster::GetMetaData( int element ) const
-{
-	Assert( element >= 0 && element < KV3_CLUSTER_MAX_ELEMENTS );
-
-	if ( !m_pMetaData )
-		return NULL;
-
-	return &m_pMetaData->m_elements[ element ];
-}
-
-CKeyValues3Cluster::CKeyValues3Cluster( CKeyValues3Context* context ) :
-	CKeyValues3BaseCluster(context)
-{
-	m_nAllocatedElements = KV3_CLUSTER_MAX_ELEMENTS;
-
-	KeyValues3ClusterNode* node = NULL;
-
-	if ( 2 * m_nAllocatedElements > 0 )
-	{
-		for ( int i = KV3_CLUSTER_MAX_ELEMENTS - 1, j = 0; j < m_nAllocatedElements; i--, j++ )
-		{
-			m_KeyValues[i].m_pNextFree = node;
-			node = &m_KeyValues[i];
-		}
-	}
-
-	m_pNextFreeNode = &m_KeyValues[0];
-}
-
-CKeyValues3Cluster::~CKeyValues3Cluster() 
-{
-	FreeMetaData();
-}
-
-#include "tier0/memdbgoff.h"
-
-KeyValues3* CKeyValues3Cluster::Alloc( KV3TypeEx_t type, KV3SubType_t subtype )
-{
-	KeyValues3* kv = &m_pNextFreeNode->m_KeyValue;
-	KeyValues3ClusterNode* node = m_pNextFreeNode;
-
-	if ( node )
-	{
-		++m_nElementCount;
-		m_pNextFreeNode = node->m_pNextFree;
-	}
-
-	Construct( kv, m_nElementCount - 1, type, subtype );
-	return kv;
-}
-
-#include "tier0/memdbgon.h"
-
-void CKeyValues3Cluster::Free( int element )
-{
-	Assert( element >= 0 && element < KV3_CLUSTER_MAX_ELEMENTS );
-	KeyValues3* kv = &m_KeyValues[ element ].m_KeyValue;
-	Destruct( kv );
-	memset( (void *)kv, 0, sizeof( KeyValues3 ) );
-	m_nAllocatedElements &= ~( 1ull << element );
-}
-
-void CKeyValues3Cluster::PurgeElements()
-{
-	uint64 mask = 1;
-	for ( int i = 0; i < KV3_CLUSTER_MAX_ELEMENTS; ++i )
-	{
-		if ( ( m_nAllocatedElements & mask ) != 0 )
-			m_KeyValues[ i ].m_KeyValue.OnClearContext();
-		mask <<= 1;
-	}
-
-	m_nAllocatedElements = 0;
-}
-
-void CKeyValues3Cluster::Purge()
-{
-	PurgeElements();
-
-	if ( m_pMetaData )
-	{
-		for ( int i = 0; i < KV3_CLUSTER_MAX_ELEMENTS; ++i )
-			m_pMetaData->m_elements[ i ].Purge();
-	}
-}
-
-void CKeyValues3Cluster::Clear()
-{
-	PurgeElements();
-
-	if ( m_pMetaData )
-	{
-		for ( int i = 0; i < KV3_CLUSTER_MAX_ELEMENTS; ++i )
-			m_pMetaData->m_elements[ i ].Clear();
-	}
-}
-
-CKeyValues3ArrayCluster::CKeyValues3ArrayCluster( CKeyValues3Context* context ) :
-	CKeyValues3BaseCluster( context )
-{
-	m_nAllocatedElements = KV3_ARRAY_INIT_SIZE;
-
-	CKeyValues3ArrayNode* node = NULL;
-
-	if ( 2 * m_nAllocatedElements > 0 )
-	{
-		for ( int i = KV3_ARRAY_INIT_SIZE - 1, j = 0; j < m_nAllocatedElements; i--, j++ )
-		{
-			m_Elements[i].m_pNextFree = node;
-			node = &m_Elements[i];
-		}
-	}
-
-	m_pNextFreeNode = (KeyValues3ClusterNode*)&m_Elements[0];
-}
-
-CKeyValues3TableCluster::CKeyValues3TableCluster( CKeyValues3Context* context ) :
-	CKeyValues3BaseCluster( context )
-{
-	m_nAllocatedElements = KV3_TABLE_INIT_SIZE;
-
-	CKeyValues3TableNode* node = NULL;
-
-	if ( 2 * m_nAllocatedElements > 0 )
-	{
-		for ( int i = KV3_TABLE_INIT_SIZE - 1, j = 0; j < m_nAllocatedElements; i--, j++ )
-		{
-			m_Elements[i].m_pNextFree = node;
-			node = &m_Elements[i];
-		}
-	}
-
-	m_pNextFreeNode = (KeyValues3ClusterNode*)&m_Elements[0];
-}
-
 CKeyValues3ContextBase::CKeyValues3ContextBase( CKeyValues3Context* context ) : 	
 	m_pContext( context ),
 	m_KV3BaseCluster( context ),
@@ -2015,7 +1843,6 @@ void CKeyValues3ContextBase::Clear()
 	m_BinaryData.Clear();
 
 	m_KV3BaseCluster.Clear();
-	m_KV3BaseCluster.SetNextFree( NULL );
 
 	m_Symbols.RemoveAll();
 
@@ -2027,7 +1854,6 @@ void CKeyValues3ContextBase::Purge()
 	m_BinaryData.Purge();
 
 	m_KV3BaseCluster.Purge();
-	m_KV3BaseCluster.SetNextFree(NULL);
 
 	m_Symbols.Purge();
 
@@ -2256,7 +2082,7 @@ KeyValues3* CKeyValues3Context::Root()
 		DebuggerBreak();
 	}
 
-	return &m_KV3BaseCluster.Head()->m_KeyValue;
+	return &m_KV3BaseCluster.Head()->m_Value;
 }
 
 const char* CKeyValues3Context::AllocString( const char* pString )
@@ -2359,3 +2185,5 @@ void CKeyValues3Context::FreeKV( KeyValues3* kv )
 
 	// Free<KeyValues3, CKeyValues3Cluster>( kv, &m_KV3BaseCluster, m_pKV3FreeCluster );
 }
+
+#include "tier0/memdbgoff.h"
