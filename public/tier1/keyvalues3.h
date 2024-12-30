@@ -109,11 +109,23 @@ PLATFORM_OVERLOAD bool SaveKV3ToFile( const KV3ID_t& encoding, const KV3ID_t& fo
 typedef int32 KV3MemberId_t;
 #define KV3_INVALID_MEMBER ((KV3MemberId_t)-1)
 
+// AMNOTE: These constants aren't actual constants, but rather calculated at compile time
+// but the way they are calculated is unknown, previously it was using CUtlLeanVector min/max calculations
+// but in here they seem to not match that behaviour.
 enum
 {
-	KV3_MIN_CHUNKS = 4,
-	KV3_MAX_CHUNKS = 102261076,
+	ALLOC_KV3TABLE_MIN = 4,
+	ALLOC_KV3TABLE_MAX = 0x6186154,
 
+	ALLOC_KV3ARRAY_MIN = 4,
+	ALLOC_KV3ARRAY_MAX = 0xFFFFF7F,
+
+	ALLOC_CONTEXT_NODELIST_MIN = 32,
+	ALLOC_CONTEXT_NODELIST_MAX = INT_MAX
+};
+
+enum
+{
 	KV3_ARRAY_MAX_FIXED_MEMBERS = 6,
 	KV3_TABLE_MAX_FIXED_MEMBERS = 8,
 
@@ -269,10 +281,28 @@ namespace KV3Helpers
 			return (alignof(T) > PackAlignOf<Ts...>()) ? alignof(T) : PackAlignOf<Ts...>();
 	}
 
-	template<size_t ALIGN, typename... Ts>
+	template <size_t ALIGN, typename... Ts>
 	constexpr size_t PackSizeOf( int size )
 	{
 		return ((ALIGN_VALUE( size * sizeof( Ts ), ALIGN )) + ... + 0);
+	}
+
+	inline int CalcNewBufferSize( int old_size, int requested_size, int min_size, int max_size )
+	{
+		int new_size = MAX( old_size, min_size );
+
+		while(new_size < requested_size)
+		{
+			if(new_size < max_size / 2)
+				new_size *= 2;
+			else
+			{
+				new_size = max_size;
+				break;
+			}
+		}
+
+		return new_size;
 	}
 }
 
@@ -512,6 +542,15 @@ private:
 	template <typename T>
 	T *AllocateOnHeap( int initial_size = 0 );
 
+	template <typename T>
+	void FreeOnHeap( T *element );
+
+	void FreeArray( CKeyValues3Array *element, bool clearing_context = false );
+	void FreeTable( CKeyValues3Table *element, bool clearing_context = false );
+
+	KeyValues3 *AllocMember( KV3TypeEx_t type = KV3_TYPEEX_NULL, KV3SubType_t subtype = KV3_SUBTYPE_UNSPECIFIED );
+	void FreeMember( KeyValues3 *member );
+
 	void Free( bool bClearingContext = false );
 	void ResolveUnspecified();
 	void PrepareForType( KV3TypeEx_t type, KV3SubType_t subtype );
@@ -574,6 +613,7 @@ public:
 	static const size_t DATA_ALIGNMENT = KV3Helpers::PackAlignOf<Element_t>();
 
 	CKeyValues3Array( int cluster_elem = -1, int alloc_size = DATA_SIZE );
+	~CKeyValues3Array() { PurgeBuffers(); }
 
 	int GetClusterElement() const { return m_nClusterElement; }
 	void SetClusterElement( int element ) { m_nClusterElement = element; }
@@ -588,13 +628,16 @@ public:
 	const Element_t Element( int i ) const { return const_cast<CKeyValues3Array*>(this)->Element( i ); }
 	int Count() const { return m_nCount; }
 
-	void SetCount( KeyValues3 *kv, int count, KV3TypeEx_t type = KV3_TYPEEX_NULL, KV3SubType_t subtype = KV3_SUBTYPE_UNSPECIFIED );
-	Element_t* InsertBeforeGetPtr( int elem, int num );
-	void CopyFrom( KeyValues3 *kv, const CKeyValues3Array* pSrc );
-	void RemoveMultiple( int elem, int num );
+	void EnsureElementCapacity( int count, bool force = false, bool dont_move = false );
 
-	void OnClearContext() { Purge( true ); }
-	void Purge( bool bClearingContext = false );
+	void SetCount( KeyValues3 *parent, int count, KV3TypeEx_t type = KV3_TYPEEX_NULL, KV3SubType_t subtype = KV3_SUBTYPE_UNSPECIFIED );
+	Element_t* InsertMultipleBefore( KeyValues3 *parent, int from, int num );
+	void CopyFrom( KeyValues3 *parent, const CKeyValues3Array* pSrc );
+	void RemoveMultiple( KeyValues3 *parent, int from, int num );
+
+	void OnClearContext() { PurgeContent( nullptr, true ); }
+	void PurgeContent( KeyValues3 *parent = nullptr, bool clearing_context = false );
+	void PurgeBuffers();
 
 	static constexpr size_t TotalSizeOf( int initial_size ) { return ALIGN_VALUE( TotalSizeWithoutStaticData() + TotalSizeOfData( MAX( initial_size, 0 ) ), 8 ); }
 	static constexpr size_t TotalSizeOfData( int size ) { return MAX( (KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Element_t>( size )), sizeof( m_pDynamicElements ) ); }
@@ -628,15 +671,22 @@ COMPILE_TIME_ASSERT(sizeof(CKeyValues3Array) == 64);
 class CKeyValues3Table
 {
 public:
+	enum : uint8
+	{
+		TABLEFL_NONE = 0,
+		TABLEFL_NAME_EXTERNAL = (1 << 0)
+	};
+
 	typedef uint32			Hash_t;
 	typedef KeyValues3*		Member_t;
 	typedef const char*		Name_t;
-	typedef bool			IsExternalName_t;
+	typedef uint8			Flags_t;
 
 	static const size_t DATA_SIZE = KV3_TABLE_MAX_FIXED_MEMBERS;
-	static const size_t DATA_ALIGNMENT = KV3Helpers::PackAlignOf<Hash_t, Member_t, Name_t, IsExternalName_t>();
+	static const size_t DATA_ALIGNMENT = KV3Helpers::PackAlignOf<Hash_t, Member_t, Name_t, Flags_t>();
 
 	CKeyValues3Table( int cluster_elem = -1, int alloc_size = DATA_SIZE );
+	~CKeyValues3Table() { PurgeBuffers(); }
 
 	int GetClusterElement() const { return m_nClusterElement; }
 	void SetClusterElement( int element ) { m_nClusterElement = element; }
@@ -650,22 +700,24 @@ public:
 	const Name_t GetMemberName( KV3MemberId_t id ) const;
 	const Hash_t GetMemberHash( KV3MemberId_t id ) const;
 
+	void PurgeFastSearch();
 	void EnableFastSearch();
 	void EnsureMemberCapacity( int num, bool force = false, bool dont_move = false );
 
 	KV3MemberId_t FindMember( const KeyValues3* kv ) const;
 	KV3MemberId_t FindMember( const CKV3MemberName &name );
-	KV3MemberId_t CreateMember( const CKV3MemberName &name );
+	KV3MemberId_t CreateMember( KeyValues3 *parent, const CKV3MemberName &name, bool name_external = false );
 
-	void CopyFrom( const CKeyValues3Table* pSrc );
-	void RemoveMember( KV3MemberId_t id );
-	void RemoveAll( int nAllocSize = 0 );
+	void CopyFrom( KeyValues3 *parent, const CKeyValues3Table* src );
+	void RemoveMember( KeyValues3 *parent, KV3MemberId_t id );
+	void RemoveAll( KeyValues3 *parent, int new_size = 0 );
 
-	void OnClearContext() { Purge( true ); }
-	void Purge( bool bClearingContext = false );
+	void OnClearContext() { PurgeContent( nullptr, true ); }
+	void PurgeContent( KeyValues3 *parent = nullptr, bool bClearingContext = false );
+	void PurgeBuffers();
 
 	static constexpr size_t TotalSizeOf( int initial_size ) { return ALIGN_VALUE( TotalSizeWithoutStaticData() + TotalSizeOfData( MAX( initial_size, 0 ) ), 8 ); }
-	static constexpr size_t TotalSizeOfData( int size ) { return MAX( (KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t, Member_t, Name_t, IsExternalName_t>( size )), sizeof(m_pDynamicBuffer) ); }
+	static constexpr size_t TotalSizeOfData( int size ) { return MAX( (KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t, Member_t, Name_t, Flags_t>( size )), sizeof(m_pDynamicBuffer) ); }
 	static constexpr size_t TotalSizeWithoutStaticData() { return sizeof(CKeyValues3Table) - sizeof(m_StaticBuffer); }
 
 private:
@@ -677,20 +729,20 @@ private:
 	constexpr size_t OffsetToHashesBase( int size ) const { return 0; }
 	constexpr size_t OffsetToMembersBase( int size ) const { return KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t>( size ); }
 	constexpr size_t OffsetToNamesBase( int size ) const { return KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t, Member_t>( size ); }
-	constexpr size_t OffsetToIsExternalNameBase( int size ) const { return KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t, Member_t, Name_t>( size ); }
+	constexpr size_t OffsetToFlagsBase( int size ) const { return KV3Helpers::PackSizeOf<DATA_ALIGNMENT, Hash_t, Member_t, Name_t>( size ); }
 
 	// Gets the base address (can change when adding elements!)
 	void *Base() { return IsBaseStatic() ? &m_StaticBuffer : m_pDynamicBuffer; };
 	Hash_t *HashesBase() { return reinterpret_cast<Hash_t *>((uint8 *)Base() + OffsetToHashesBase( GetAllocatedChunks() )); }
 	Member_t *MembersBase() { return reinterpret_cast<Member_t *>((uint8 *)Base() + OffsetToMembersBase( GetAllocatedChunks() )); }
 	Name_t *NamesBase() { return reinterpret_cast<Name_t *>((uint8 *)Base() + OffsetToNamesBase( GetAllocatedChunks() )); }
-	IsExternalName_t *IsExternalNameBase() { return reinterpret_cast<IsExternalName_t *>((uint8 *)Base() + OffsetToIsExternalNameBase( GetAllocatedChunks() )); }
+	Flags_t *FlagsBase() { return reinterpret_cast<Flags_t *>((uint8 *)Base() + OffsetToFlagsBase( GetAllocatedChunks() )); }
 
 	const void *Base() const { return const_cast<void *>(Base()); }
 	const Hash_t *HashesBase() const { return const_cast<Hash_t *>(HashesBase()); }
 	const Member_t *MembersBase() const { return const_cast<Member_t *>(MembersBase()); }
 	const Name_t *NamesBase() const { return const_cast<Name_t *>(NamesBase()); }
-	const IsExternalName_t *IsExternalNameBase() const { return const_cast<IsExternalName_t *>(IsExternalNameBase()); }
+	const Flags_t *FlagsBase() const { return const_cast<Flags_t *>(FlagsBase()); }
 
 private:
 	int m_nClusterElement;
@@ -698,6 +750,7 @@ private:
 
 	struct kv3tablefastsearch_t {
 		kv3tablefastsearch_t() : m_ignore( false ), m_ignores_counter( 0 ) {}
+		~kv3tablefastsearch_t() { Clear(); }
 
 		void Clear()
 		{
@@ -729,7 +782,7 @@ private:
 			Hash_t m_Hashes[DATA_SIZE];
 			Member_t m_Members[DATA_SIZE];
 			Name_t m_Names[DATA_SIZE];
-			IsExternalName_t m_IsExternalName[DATA_SIZE];
+			Flags_t m_Flags[DATA_SIZE];
 		} m_StaticBuffer;
 
 		void* m_pDynamicBuffer;
@@ -761,6 +814,7 @@ public:
 	};
 
 	CKeyValues3ClusterImpl( CKeyValues3Context *context, bool allocated_on_heap = false, int initial_size = SIZE );
+	~CKeyValues3ClusterImpl() { Purge(); }
 
 	CKeyValues3Context *GetContext() const { return m_pContext; }
 
@@ -773,7 +827,7 @@ public:
 	NodeType *Alloc( Args&&... args );
 
 	void Free( int element, bool clearing_context = false );
-	void Free( Node *node, bool clearing_context = false );
+	void Free( NodeType *node, bool clearing_context = false );
 
 	void Purge();
 	void Clear();
@@ -796,7 +850,10 @@ public:
 	void EnableMetaData( bool bEnable );
 	void ClearMetaData();
 	void PurgeMetaData();
+	void PurgeMetaData( int element );
 	KV3MetaData_t *GetMetaData( int element ) const;
+
+	int GetNodeIndex( NodeType *node ) const;
 
 	static constexpr size_t TotalSizeOf( int initial_size ) { return ALIGN_VALUE( TotalSizeWithoutStaticData() + TotalSizeOfData( MAX( initial_size, 0 ) ), 8 ); }
 	static constexpr size_t TotalSizeOfData( int size ) { return sizeof( Node ) * size; }
@@ -809,8 +866,6 @@ public:
 private:
 	void InitNodes();
 	void PurgeNodes( bool clearing_context = false );
-
-	int GetNodeIndex( Node *node ) const;
 
 private:
 	struct kv3metadata_t
@@ -843,7 +898,7 @@ public:
 	void Purge();
 
 protected:
-	template <typename T>
+	template <typename CLUSTER>
 	struct ClusterNodeChain
 	{
 		ClusterNodeChain() : m_pTail( nullptr ), m_pHead( nullptr )
@@ -855,21 +910,21 @@ protected:
 			m_pHead = nullptr;
 		}
 
-		void AddToChain( T *cluster );
-		void RemoveFromChain( T *cluster );
+		void AddToChain( CLUSTER *cluster );
+		void RemoveFromChain( CLUSTER *cluster );
 
-		T *m_pTail;
-		T *m_pHead;
+		CLUSTER *m_pTail;
+		CLUSTER *m_pHead;
 	};
 
-	template <typename T>
+	template <typename NODE>
 	class NodeList
 	{
 	public:
 		struct ListEntry
 		{
 			ListEntry *m_pNext;
-			T m_Value;
+			NODE m_Value;
 		};
 
 		NodeList() : m_nUsedBytes( 0 ), m_nAllocatedBytes( 0 ), m_pData( nullptr )
@@ -877,7 +932,7 @@ protected:
 
 		~NodeList() { Free(); }
 
-		T *Alloc( int initial_size );
+		NODE *Alloc( int initial_size );
 		void Free() { Purge(); }
 		void Purge();
 		void Clear();
@@ -890,6 +945,8 @@ protected:
 
 		ListEntry *Head() { return &m_pData[0]; }
 		ListEntry *Tail() { return reinterpret_cast<ListEntry *>((uint8 *)Head() + m_nUsedBytes); }
+
+		bool IsWithinRange( NODE *element ) { return AllocatedBytes() > 0 && element >= (void *)Head() && element < (void *)Tail(); }
 
 	private:
 		void EnsureByteSize( int bytes_needed );
@@ -962,29 +1019,32 @@ public:
 	void Clear();
 	void Purge();
 
-	template<typename T>
-	void ClearClusterNodeChain( ClusterNodeChain<T> *cluster_node );
-	template<typename T>
-	void PurgeClusterNodeChain( ClusterNodeChain<T> *cluster_node );
+	template <typename CLUSTER>
+	void ClearClusterNodeChain( ClusterNodeChain<CLUSTER> &cluster_node );
+	template <typename CLUSTER>
+	void PurgeClusterNodeChain( ClusterNodeChain<CLUSTER> &cluster_node );
+
+	bool IsArrayRawAllocated( CKeyValues3Array *element ) { return m_RawArrayEntries.IsWithinRange( element ); }
+	bool IsTableRawAllocated( CKeyValues3Table *element ) { return m_RawTableEntries.IsWithinRange( element ); }
 
 private:
-	template <typename T>
-	void MoveToPartial( ClusterNodeChain<T> *full_cluster, ClusterNodeChain<T> *partial_cluster );
+	template <typename CLUSTER>
+	void MoveToPartial( ClusterNodeChain<CLUSTER> &full_cluster, ClusterNodeChain<CLUSTER> &partial_cluster );
 
-	template <typename T, typename... Args, typename = typename std::enable_if_t<std::is_constructible_v<T::NodeType, Args...>, int>>
-	auto Alloc( ClusterNodeChain<T> *partial_clusters, ClusterNodeChain<T> *full_clusters, int initial_size = T::SIZE, Args&&... args );
+	template <typename CLUSTER, typename... Args, typename = typename std::enable_if_t<std::is_constructible_v<CLUSTER::NodeType, Args...>, int>>
+	auto Alloc( ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters, int initial_size = CLUSTER::SIZE, Args&&... args );
 
-	template <typename T>
-	T *AllocCluster( ClusterNodeChain<T> *partial_clusters, int initial_size = T::SIZE );
+	template <typename CLUSTER, typename NODE, typename... Args, typename = typename std::enable_if_t<std::is_constructible_v<CLUSTER::NodeType, Args...>, int>>
+	NODE *RawAlloc( NodeList<NODE> &raw_array, ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters, int initial_size = CLUSTER::SIZE, Args&&... args );
 
-	CKeyValues3Array* AllocArray( int initial_size = 0 );
-	CKeyValues3Table* AllocTable( int initial_size = 0 );
+	CKeyValues3Array *AllocArray( int initial_size = 0 ) { return RawAlloc( m_RawArrayEntries, m_PartialArrayClusters, m_FullArrayClusters, initial_size ); }
+	CKeyValues3Table *AllocTable( int initial_size = 0 ) { return RawAlloc( m_RawTableEntries, m_PartialTableClusters, m_FullTableClusters, initial_size ); }
 
-	template<class ELEMENT_TYPE, class CLUSTER_TYPE, class TABLE_TYPE>
-	void Free( ELEMENT_TYPE* element, CLUSTER_TYPE* base, CLUSTER_TYPE*& head, TABLE_TYPE *pTable );
+	template<typename CLUSTER, typename NODE>
+	void Free( NODE *element, ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters );
 
-	void FreeArray( CKeyValues3Array* arr ) { Assert( 0 ); }
-	void FreeTable( CKeyValues3Table* table ) { Assert( 0 ); }
+	inline void FreeArray( CKeyValues3Array *element ) { Free( element, m_PartialArrayClusters, m_FullArrayClusters ); }
+	inline void FreeTable( CKeyValues3Table *element ) { Free( element, m_PartialTableClusters, m_FullTableClusters ); }
 
 private:
 	uint8 pad[ KV3_CONTEXT_SIZE - ( sizeof( BaseClass ) % KV3_CONTEXT_SIZE ) ];
@@ -1091,6 +1151,14 @@ inline T *KeyValues3::AllocateOnHeap( int initial_size )
 	return element;
 }
 
+template<typename T>
+inline void KeyValues3::FreeOnHeap( T *element )
+{
+	Destruct( element );
+
+	g_pMemAlloc->RegionFree( MEMALLOC_REGION_FREE_4, element );
+}
+
 template < typename T >
 void KeyValues3::AllocArray( int size, const T* data, KV3ArrayAllocType_t alloc_type, KV3TypeEx_t type_short, KV3TypeEx_t type_ptr, KV3SubType_t subtype, KV3TypeEx_t type_elem, KV3SubType_t subtype_elem )
 {
@@ -1157,53 +1225,6 @@ void KeyValues3::AllocArray( int size, const T* data, KV3ArrayAllocType_t alloc_
 	}
 }
 
-template<class ELEMENT_TYPE, class CLUSTER_TYPE, class TABLE_TYPE>
-void CKeyValues3Context::Free( ELEMENT_TYPE* element, CLUSTER_TYPE* base, CLUSTER_TYPE*& head, TABLE_TYPE *pTable )
-{
-	CLUSTER_TYPE* cluster = element->GetCluster();
-
-	Assert( cluster != NULL && cluster->GetContext() == m_pContext );
-
-	cluster->Free( element->GetClusterElement() );
-
-	int num_allocated = cluster->NumAllocated();
-
-	if ( !num_allocated )
-	{
-		if ( cluster == base )
-			return;
-
-		// vec.FindAndFastRemove( cluster );
-
-		if ( head != cluster )
-		{
-			CLUSTER_TYPE* cur = head;
-
-			while ( cur )
-			{
-				CLUSTER_TYPE* next = cur->GetNextFree();
-				if ( next == cluster )
-					break;
-				cur = next;
-			}
-
-			if ( cur )
-				cur->SetNextFree( cluster->GetNextFree() );
-		}
-		else
-		{
-			head = cluster->GetNextFree();
-		}
-
-		delete cluster;
-	}
-	else if ( num_allocated == ( KV3_CLUSTER_MAX_ELEMENTS - 1 ) )
-	{
-		cluster->SetNextFree( head );
-		head = cluster;
-	}
-}
-
 template<size_t SIZE, typename T>
 inline CKeyValues3ClusterImpl<SIZE, T>::CKeyValues3ClusterImpl( CKeyValues3Context *context, bool allocated_on_heap, int initial_size ) :
 	m_pContext( context ),
@@ -1229,7 +1250,7 @@ inline T *CKeyValues3ClusterImpl<SIZE, T>::Alloc( Args&&... args )
 	SetNextFree( node->m_pNextFree );
 
 	Construct( &node->m_Value, std::forward<Args>( args )... );
-	node->m_Value.SetClusterElement( GetNodeIndex( node ) );
+	node->m_Value.SetClusterElement( GetNodeIndex( &node->m_Value ) );
 
 	m_nElementCount++;
 
@@ -1237,7 +1258,7 @@ inline T *CKeyValues3ClusterImpl<SIZE, T>::Alloc( Args&&... args )
 }
 
 template<size_t SIZE, typename T>
-inline void CKeyValues3ClusterImpl<SIZE, T>::Free( Node* node, bool clearing_context )
+inline void CKeyValues3ClusterImpl<SIZE, T>::Free( NodeType* node, bool clearing_context )
 {
 	Assert( node >= Head() && node < Tail() );
 	Free( GetNodeIndex( node ), clearing_context );
@@ -1284,23 +1305,28 @@ inline void CKeyValues3ClusterImpl<SIZE, T>::PurgeNodes( bool clearing_context )
 
 	for(auto iter = GetNextFree(); iter; iter = iter->m_pNextFree)
 	{
-		free_nodes.Set( GetNodeIndex( iter ) );
+		free_nodes.Set( GetNodeIndex( &iter->m_Value ) );
 	}
 
-	for(int i = 0; i < NumAllocated(); i++)
+	if(!free_nodes.IsAllSet())
 	{
-		if(!free_nodes.IsBitSet( i ))
+		for(int i = 0; i < NumAllocated(); i++)
 		{
-			Free( i, clearing_context );
+			if(!free_nodes.IsBitSet( i ))
+			{
+				Free( i, clearing_context );
+			}
 		}
-	}
 
-	InitNodes();
+		InitNodes();
+	}
 }
 
 template<size_t SIZE, typename T>
-inline int CKeyValues3ClusterImpl<SIZE, T>::GetNodeIndex( Node *node ) const
+inline int CKeyValues3ClusterImpl<SIZE, T>::GetNodeIndex( NodeType *element ) const
 {
+	Node *node = reinterpret_cast<Node *>(element);
+
 	auto head = Head();
 	if(node < head || node >= Tail())
 		return -1;
@@ -1368,6 +1394,16 @@ void CKeyValues3ClusterImpl<SIZE, T>::PurgeMetaData()
 }
 
 template<size_t SIZE, typename T>
+void CKeyValues3ClusterImpl<SIZE, T>::PurgeMetaData( int element )
+{
+	if(!m_pMetaData)
+		return;
+
+	Assert( element >= 0 && element < m_pMetaData->m_AllocatedElements );
+	GetMetaData( element )->Clear();
+}
+
+template<size_t SIZE, typename T>
 KV3MetaData_t *CKeyValues3ClusterImpl<SIZE, T>::GetMetaData( int element ) const
 {
 	if(!m_pMetaData)
@@ -1377,8 +1413,8 @@ KV3MetaData_t *CKeyValues3ClusterImpl<SIZE, T>::GetMetaData( int element ) const
 	return &m_pMetaData->m_elements[element];
 }
 
-template<typename T>
-inline void CKeyValues3ContextBase::ClusterNodeChain<T>::AddToChain( T *cluster )
+template<typename CLUSTER>
+inline void CKeyValues3ContextBase::ClusterNodeChain<CLUSTER>::AddToChain( CLUSTER *cluster )
 {
 	if(m_pTail)
 		m_pTail->SetNext( cluster );
@@ -1391,8 +1427,8 @@ inline void CKeyValues3ContextBase::ClusterNodeChain<T>::AddToChain( T *cluster 
 	m_pTail = cluster;
 }
 
-template<typename T>
-inline void CKeyValues3ContextBase::ClusterNodeChain<T>::RemoveFromChain( T *cluster )
+template<typename CLUSTER>
+inline void CKeyValues3ContextBase::ClusterNodeChain<CLUSTER>::RemoveFromChain( CLUSTER *cluster )
 {
 	auto prev = cluster->GetPrev();
 	auto next = cluster->GetNext();
@@ -1411,33 +1447,22 @@ inline void CKeyValues3ContextBase::ClusterNodeChain<T>::RemoveFromChain( T *clu
 	cluster->SetNext( nullptr );
 }
 
-template<typename T>
-inline void CKeyValues3ContextBase::NodeList<T>::EnsureByteSize( int bytes_needed )
+template<typename NODE>
+inline void CKeyValues3ContextBase::NodeList<NODE>::EnsureByteSize( int bytes_needed )
 {
 	if(bytes_needed < m_nAllocatedBytes)
 		return;
 
-	int new_alloc_size = MAX( m_nAllocatedBytes, 32 );
-
-	while(new_alloc_size < bytes_needed)
-	{
-		if(new_alloc_size < INT_MAX / 2)
-			new_alloc_size *= 2;
-		else
-		{
-			new_alloc_size = INT_MAX;
-			break;
-		}
-	}
+	int new_alloc_size = KV3Helpers::CalcNewBufferSize( m_nAllocatedBytes, bytes_needed, ALLOC_CONTEXT_NODELIST_MIN, ALLOC_CONTEXT_NODELIST_MAX );
 
 	m_pData = (ListEntry *)realloc( m_pData, new_alloc_size );
 	m_nAllocatedBytes = new_alloc_size;
 }
 
-template<typename T>
-inline T *CKeyValues3ContextBase::NodeList<T>::Alloc( int initial_size )
+template<typename NODE>
+inline NODE *CKeyValues3ContextBase::NodeList<NODE>::Alloc( int initial_size )
 {
-	int byte_size_needed = m_nUsedBytes + T::TotalSizeOf( initial_size ) + 8;
+	int byte_size_needed = m_nUsedBytes + NODE::TotalSizeOf( initial_size ) + 8;
 	EnsureByteSize( byte_size_needed );
 	
 	auto entry = Tail();
@@ -1449,8 +1474,8 @@ inline T *CKeyValues3ContextBase::NodeList<T>::Alloc( int initial_size )
 	return &entry->m_Value;
 }
 
-template<typename T>
-inline void CKeyValues3ContextBase::NodeList<T>::Clear()
+template<typename NODE>
+inline void CKeyValues3ContextBase::NodeList<NODE>::Clear()
 {
 	if(m_nAllocatedBytes > 0)
 	{
@@ -1463,8 +1488,8 @@ inline void CKeyValues3ContextBase::NodeList<T>::Clear()
 	m_nUsedBytes = 0;
 }
 
-template<typename T>
-inline void CKeyValues3ContextBase::NodeList<T>::Purge()
+template<typename NODE>
+inline void CKeyValues3ContextBase::NodeList<NODE>::Purge()
 {
 	Clear();
 
@@ -1472,10 +1497,10 @@ inline void CKeyValues3ContextBase::NodeList<T>::Purge()
 	m_pData = nullptr;
 }
 
-template<typename T>
-inline void CKeyValues3Context::PurgeClusterNodeChain( ClusterNodeChain<T> *cluster_node )
+template<typename CLUSTER>
+inline void CKeyValues3Context::PurgeClusterNodeChain( ClusterNodeChain<CLUSTER> &cluster_node )
 {
-	for(auto node = cluster_node->m_pTail; node; node = node->GetPrev())
+	for(auto node = cluster_node.m_pTail; node; node = node->GetPrev())
 	{
 		if(node->IsAllocatedOnHeap())
 		{
@@ -1488,36 +1513,36 @@ inline void CKeyValues3Context::PurgeClusterNodeChain( ClusterNodeChain<T> *clus
 		}
 	}
 
-	cluster_node->Reset();
+	cluster_node.Reset();
 }
 
-template<typename T>
-inline void CKeyValues3Context::ClearClusterNodeChain( ClusterNodeChain<T> *cluster_node )
+template<typename CLUSTER>
+inline void CKeyValues3Context::ClearClusterNodeChain( ClusterNodeChain<CLUSTER> &cluster_node )
 {
-	for(auto node = cluster_node->m_pTail; node; node = node->GetPrev())
+	for(auto node = cluster_node.m_pTail; node; node = node->GetPrev())
 	{
 		node->Clear();
 	}
 }
 
-template<typename T>
-inline void CKeyValues3Context::MoveToPartial( ClusterNodeChain<T> *full_cluster, ClusterNodeChain<T> *partial_cluster )
+template<typename CLUSTER>
+inline void CKeyValues3Context::MoveToPartial( ClusterNodeChain<CLUSTER> &full_cluster, ClusterNodeChain<CLUSTER> &partial_cluster )
 {
-	for(auto node = full_cluster->m_pTail; node; node = node->GetPrev())
+	for(auto node = full_cluster.m_pTail; node; node = node->GetPrev())
 	{
-		partial_cluster->AddToChain( node );
+		partial_cluster.AddToChain( node );
 	}
 
-	full_cluster->Reset();
+	full_cluster.Reset();
 }
 
-template <typename T, typename... Args, typename>
-auto CKeyValues3Context::Alloc( ClusterNodeChain<T> *partial_clusters,
-								ClusterNodeChain<T> *full_clusters,
+template <typename CLUSTER, typename... Args, typename>
+auto CKeyValues3Context::Alloc( ClusterNodeChain<CLUSTER> &partial_clusters,
+								ClusterNodeChain<CLUSTER> &full_clusters,
 								int initial_size, Args&&... args )
 {
-	auto tail = partial_clusters->m_pTail;
-	T::NodeType *elem = nullptr;
+	auto tail = partial_clusters.m_pTail;
+	CLUSTER::NodeType *elem = nullptr;
 
 	if(tail)
 	{
@@ -1525,28 +1550,65 @@ auto CKeyValues3Context::Alloc( ClusterNodeChain<T> *partial_clusters,
 
 		if(tail->IsFull())
 		{
-			partial_clusters->RemoveFromChain( tail );
-			full_clusters->AddToChain( tail );
+			partial_clusters.RemoveFromChain( tail );
+			full_clusters.AddToChain( tail );
 		}
 	}
 	else
 	{
-		auto new_cluster = AllocCluster( partial_clusters, initial_size );
-		elem = new_cluster->Alloc( std::forward<Args>( args )... );
+		auto cluster = (CLUSTER *)g_pMemAlloc->RegionAlloc( MEMALLOC_REGION_ALLOC_4, CLUSTER::TotalSizeOf( initial_size ) );
+
+		Construct( cluster, this, true, initial_size );
+		partial_clusters.AddToChain( cluster );
+
+		elem = cluster->Alloc( std::forward<Args>( args )... );
 	}
 
 	return elem;
 }
 
-template<typename T>
-inline T *CKeyValues3Context::AllocCluster( ClusterNodeChain<T> *partial_clusters, int initial_size )
+template<typename CLUSTER, typename NODE, typename ...Args, typename>
+inline NODE *CKeyValues3Context::RawAlloc( NodeList<NODE> &raw_array, ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters, int initial_size, Args && ...args )
 {
-	auto cluster = (T *)g_pMemAlloc->RegionAlloc( MEMALLOC_REGION_ALLOC_4, T::TotalSizeOf( initial_size ) );
+	int needed_byte_size = MAX( NODE::TotalSizeOf( initial_size ), 32 );
 
-	Construct( cluster, this, true, initial_size );
-	partial_clusters->AddToChain( cluster );
+	if(raw_array.IsFull() || needed_byte_size > raw_array.FreeBytes())
+	{
+		if(initial_size <= NODE::DATA_SIZE)
+			return Alloc( partial_clusters, full_clusters );
+		else
+			return nullptr;
+	}
 
-	return cluster;
+	return raw_array.Alloc( initial_size );
+}
+
+template<typename CLUSTER, typename NODE>
+void CKeyValues3Context::Free( NODE *element, ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters )
+{
+	auto cluster = element->GetCluster();
+
+	Assert( cluster != nullptr && cluster->GetContext() == m_pContext );
+	
+	cluster->Free( element );
+
+	int num_allocated = cluster->NumAllocated();
+
+	if(cluster->NumCount() > 0)
+	{
+		if(cluster->NumCount() == cluster->NumAllocated() - 1)
+		{
+			full_clusters.RemoveFromChain( cluster );
+			partial_clusters.AddToChain( cluster );
+		}
+	}
+	else if(cluster->IsAllocatedOnHeap())
+	{
+		partial_clusters.RemoveFromChain( cluster );
+
+		Destruct( cluster );
+		g_pMemAlloc->RegionFree( MEMALLOC_REGION_FREE_4, cluster );
+	}
 }
 
 #include "tier0/memdbgoff.h"
