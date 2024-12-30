@@ -738,11 +738,11 @@ private:
 	Name_t *NamesBase() { return reinterpret_cast<Name_t *>((uint8 *)Base() + OffsetToNamesBase( GetAllocatedChunks() )); }
 	Flags_t *FlagsBase() { return reinterpret_cast<Flags_t *>((uint8 *)Base() + OffsetToFlagsBase( GetAllocatedChunks() )); }
 
-	const void *Base() const { return const_cast<void *>(Base()); }
-	const Hash_t *HashesBase() const { return const_cast<Hash_t *>(HashesBase()); }
-	const Member_t *MembersBase() const { return const_cast<Member_t *>(MembersBase()); }
-	const Name_t *NamesBase() const { return const_cast<Name_t *>(NamesBase()); }
-	const Flags_t *FlagsBase() const { return const_cast<Flags_t *>(FlagsBase()); }
+	const void *Base() const { return const_cast<CKeyValues3Table *>(this)->Base(); }
+	const Hash_t *HashesBase() const { return const_cast<CKeyValues3Table *>(this)->HashesBase(); }
+	const Member_t *MembersBase() const { return const_cast<CKeyValues3Table *>(this)->MembersBase(); }
+	const Name_t *NamesBase() const { return const_cast<CKeyValues3Table *>(this)->NamesBase(); }
+	const Flags_t *FlagsBase() const { return const_cast<CKeyValues3Table *>(this)->FlagsBase(); }
 
 private:
 	int m_nClusterElement;
