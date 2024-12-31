@@ -795,7 +795,7 @@ class CKeyValues3ClusterImpl
 {
 public:
 	typedef T NodeType;
-	static const size_t SIZE = SIZE;
+	static const size_t CLUSTER_SIZE = SIZE;
 
 	union Node
 	{
@@ -1031,11 +1031,11 @@ private:
 	template <typename CLUSTER>
 	void MoveToPartial( ClusterNodeChain<CLUSTER> &full_cluster, ClusterNodeChain<CLUSTER> &partial_cluster );
 
-	template <typename CLUSTER, typename... Args, typename = typename std::enable_if_t<std::is_constructible_v<CLUSTER::NodeType, Args...>, int>>
-	auto Alloc( ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters, int initial_size = CLUSTER::SIZE, Args&&... args );
+	template <typename CLUSTER, typename... Args, typename = typename std::enable_if_t<std::is_constructible_v<typename CLUSTER::NodeType, Args...>, int>>
+	auto Alloc( ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters, int initial_size = CLUSTER::CLUSTER_SIZE, Args&&... args );
 
-	template <typename CLUSTER, typename NODE, typename... Args, typename = typename std::enable_if_t<std::is_constructible_v<CLUSTER::NodeType, Args...>, int>>
-	NODE *RawAlloc( NodeList<NODE> &raw_array, ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters, int initial_size = CLUSTER::SIZE, Args&&... args );
+	template <typename CLUSTER, typename NODE, typename... Args, typename = typename std::enable_if_t<std::is_constructible_v<typename CLUSTER::NodeType, Args...>, int>>
+	NODE *RawAlloc( NodeList<NODE> &raw_array, ClusterNodeChain<CLUSTER> &partial_clusters, ClusterNodeChain<CLUSTER> &full_clusters, int initial_size = CLUSTER::CLUSTER_SIZE, Args&&... args );
 
 	CKeyValues3Array *AllocArray( int initial_size = 0 ) { return RawAlloc( m_RawArrayEntries, m_PartialArrayClusters, m_FullArrayClusters, initial_size ); }
 	CKeyValues3Table *AllocTable( int initial_size = 0 ) { return RawAlloc( m_RawTableEntries, m_PartialTableClusters, m_FullTableClusters, initial_size ); }
@@ -1260,7 +1260,7 @@ inline T *CKeyValues3ClusterImpl<SIZE, T>::Alloc( Args&&... args )
 template<size_t SIZE, typename T>
 inline void CKeyValues3ClusterImpl<SIZE, T>::Free( NodeType* node, bool clearing_context )
 {
-	Assert( node >= Head() && node < Tail() );
+	Assert( node >= (void *)Head() && node < (void *)Tail() );
 	Free( GetNodeIndex( node ), clearing_context );
 }
 
@@ -1542,7 +1542,7 @@ auto CKeyValues3Context::Alloc( ClusterNodeChain<CLUSTER> &partial_clusters,
 								int initial_size, Args&&... args )
 {
 	auto cluster = partial_clusters.m_pTail;
-	CLUSTER::NodeType *elem = nullptr;
+	typename CLUSTER::NodeType *elem = nullptr;
 
 	if(cluster)
 	{

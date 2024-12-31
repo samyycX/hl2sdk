@@ -19,7 +19,7 @@ KeyValues3::KeyValues3( int cluster_elem, KV3TypeEx_t type, KV3SubType_t subtype
 	m_TypeEx( type ),
 	m_SubType( subtype ),
 	m_nFlags( 0 ),
-	m_nClusterElement( -1 ),
+	m_nClusterElement( (uint16)-1 ),
 	m_nNumArrayElements( 0 ),
 	m_nReserved( 0 )
 {
@@ -1314,7 +1314,7 @@ void CKeyValues3Array::EnsureElementCapacity( int count, bool force, bool dont_m
 	if(count > ALLOC_KV3ARRAY_MAX)
 	{
 		Plat_FatalErrorFunc( "%s: element count overflow (%u)\n", __FUNCTION__, count );
-		DebugBreak();
+		DebuggerBreak();
 	}
 
 	const int new_count = force ? count : KV3Helpers::CalcNewBufferSize( m_nAllocatedChunks, count, ALLOC_KV3ARRAY_MIN, ALLOC_KV3ARRAY_MAX );
@@ -1365,13 +1365,13 @@ CKeyValues3Array::Element_t* CKeyValues3Array::InsertMultipleBefore( KeyValues3 
 	if(from < 0 || from > m_nCount)
 	{
 		Plat_FatalErrorFunc( "%s: invalid insert point %u (current count %u)\n", __FUNCTION__, from, m_nCount );
-		DebugBreak();
+		DebuggerBreak();
 	}
 
 	if(num > ALLOC_KV3ARRAY_MAX - m_nCount)
 	{
 		Plat_FatalErrorFunc( "%s: max element overflow, cur count %u + %u\n", __FUNCTION__, m_nCount, num );
-		DebugBreak();
+		DebuggerBreak();
 	}
 
 	int new_size = m_nCount + num;
@@ -1380,7 +1380,7 @@ CKeyValues3Array::Element_t* CKeyValues3Array::InsertMultipleBefore( KeyValues3 
 	Element_t *base = Base();
 	if(from < m_nCount)
 	{
-		memmove( base[from + num], base[from], sizeof(Element_t) * (m_nCount - from) );
+		memmove( (void *)base[from + num], (void *)base[from], sizeof(Element_t) * (m_nCount - from) );
 	}
 
 	for ( int i = 0; i < num; ++i )
@@ -1805,10 +1805,10 @@ void CKeyValues3Table::PurgeBuffers()
 CKeyValues3ContextBase::CKeyValues3ContextBase( CKeyValues3Context* context ) : 	
 	m_pContext( context ),
 	m_KV3BaseCluster( context ),
-	m_pParsingErrorListener( nullptr ),
 	m_bMetaDataEnabled( false ),
 	m_bFormatConverted( false ),
-	m_bRootAvailabe( false )
+	m_bRootAvailabe( false ),
+	m_pParsingErrorListener( nullptr )
 {
 	m_KV3PartialClusters.AddToChain( &m_KV3BaseCluster );
 }
@@ -1933,7 +1933,7 @@ void CKeyValues3Context::CopyMetaData( KV3MetaData_t* pDest, const KV3MetaData_t
 
 KeyValues3* CKeyValues3Context::AllocKV( KV3TypeEx_t type, KV3SubType_t subtype )
 {
-	return Alloc( m_KV3PartialClusters, m_KV3FullClusters, CKeyValues3Cluster::SIZE, type, subtype );
+	return Alloc( m_KV3PartialClusters, m_KV3FullClusters, CKeyValues3Cluster::CLUSTER_SIZE, type, subtype );
 }
 
 void CKeyValues3Context::FreeKV( KeyValues3* kv )
