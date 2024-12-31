@@ -10,6 +10,11 @@
 #endif
 
 KeyValues3::KeyValues3( KV3TypeEx_t type, KV3SubType_t subtype ) : 
+	KeyValues3( -1, type, subtype )
+{
+}
+
+KeyValues3::KeyValues3( int cluster_elem, KV3TypeEx_t type, KV3SubType_t subtype ) : 
 	m_bExternalStorage( true ),
 	m_TypeEx( type ),
 	m_SubType( subtype ),
@@ -18,19 +23,7 @@ KeyValues3::KeyValues3( KV3TypeEx_t type, KV3SubType_t subtype ) :
 	m_nNumArrayElements( 0 ),
 	m_nReserved( 0 )
 {
-	ResolveUnspecified();
-	Alloc();
-}
-
-KeyValues3::KeyValues3( int cluster_elem, KV3TypeEx_t type, KV3SubType_t subtype ) : 
-	m_bExternalStorage( false ),
-	m_TypeEx( type ),
-	m_SubType( subtype ),
-	m_nFlags( 0 ),
-	m_nClusterElement( cluster_elem ),
-	m_nNumArrayElements( 0 ),
-	m_nReserved( 0 )
-{
+	SetClusterElement( cluster_elem );
 	ResolveUnspecified();
 	Alloc();
 }
@@ -165,7 +158,7 @@ void KeyValues3::FreeArray( CKeyValues3Array *element, bool clearing_context )
 	else
 	{
 		auto context = GetContext();
-		bool raw_allocated = context->IsArrayRawAllocated( element );
+		bool raw_allocated = context && context->IsArrayRawAllocated( element );
 
 		if(!raw_allocated && element->GetClusterElement() < 0)
 		{
@@ -1534,11 +1527,15 @@ void CKeyValues3Table::EnsureMemberCapacity( int count, bool force, bool dont_mo
 	const int new_count = force ? count : KV3Helpers::CalcNewBufferSize( m_nAllocatedChunks, count, ALLOC_KV3TABLE_MIN, ALLOC_KV3TABLE_MAX );
 	const int new_byte_size = TotalSizeOfData( new_count );
 
-	void *new_base = m_bIsDynamicallySized ? realloc( m_pDynamicBuffer, new_byte_size ) : malloc( new_byte_size );
+	void *new_base = nullptr;
 
 	if(m_bIsDynamicallySized)
 	{
 		new_base = realloc( m_pDynamicBuffer, new_byte_size );
+
+		memmove( (uint8 *)new_base + OffsetToFlagsBase( new_count ), FlagsBase(), m_nCount * sizeof( Flags_t ) );
+		memmove( (uint8 *)new_base + OffsetToNamesBase( new_count ), NamesBase(), m_nCount * sizeof( Name_t ) );
+		memmove( (uint8 *)new_base + OffsetToMembersBase( new_count ), MembersBase(), m_nCount * sizeof( Member_t ) );
 	}
 	else
 	{
@@ -1813,6 +1810,7 @@ CKeyValues3ContextBase::CKeyValues3ContextBase( CKeyValues3Context* context ) :
 	m_bFormatConverted( false ),
 	m_bRootAvailabe( false )
 {
+	m_KV3PartialClusters.AddToChain( &m_KV3BaseCluster );
 }
 
 void CKeyValues3ContextBase::Clear()

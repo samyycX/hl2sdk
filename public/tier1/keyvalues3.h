@@ -558,7 +558,7 @@ private:
 	void CopyFrom( const KeyValues3* pSrc );
 
 	int GetClusterElement() const { return m_nClusterElement; }
-	void SetClusterElement( int element ) { m_nClusterElement = element; }
+	void SetClusterElement( int element ) { m_bExternalStorage = (element == -1); m_nClusterElement = element; }
 	CKeyValues3Cluster* GetCluster() const;
 
 	template < typename T > T FromString( T defaultValue ) const;
@@ -1541,22 +1541,22 @@ auto CKeyValues3Context::Alloc( ClusterNodeChain<CLUSTER> &partial_clusters,
 								ClusterNodeChain<CLUSTER> &full_clusters,
 								int initial_size, Args&&... args )
 {
-	auto tail = partial_clusters.m_pTail;
+	auto cluster = partial_clusters.m_pTail;
 	CLUSTER::NodeType *elem = nullptr;
 
-	if(tail)
+	if(cluster)
 	{
-		elem = tail->Alloc( std::forward<Args>( args )... );
+		elem = cluster->Alloc( std::forward<Args>( args )... );
 
-		if(tail->IsFull())
+		if(cluster->IsFull())
 		{
-			partial_clusters.RemoveFromChain( tail );
-			full_clusters.AddToChain( tail );
+			partial_clusters.RemoveFromChain( cluster );
+			full_clusters.AddToChain( cluster );
 		}
 	}
 	else
 	{
-		auto cluster = (CLUSTER *)g_pMemAlloc->RegionAlloc( MEMALLOC_REGION_ALLOC_4, CLUSTER::TotalSizeOf( initial_size ) );
+		cluster = (CLUSTER *)g_pMemAlloc->RegionAlloc( MEMALLOC_REGION_ALLOC_4, CLUSTER::TotalSizeOf( initial_size ) );
 
 		Construct( cluster, this, true, initial_size );
 		partial_clusters.AddToChain( cluster );
