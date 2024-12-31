@@ -654,7 +654,7 @@ private:
 	int m_nAllocatedChunks;
 
 	int m_nCount;
-	int8 m_nInitialSize;
+	uint8 m_nInitialSize;
 	bool m_bIsDynamicallySized;
 
 	bool m_unk001;
@@ -769,7 +769,7 @@ private:
 
 	int m_nCount;
 
-	int8 m_nInitialSize;
+	uint8 m_nInitialSize;
 	bool m_bIsDynamicallySized;
 
 	bool m_unk001;
